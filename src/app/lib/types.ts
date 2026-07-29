@@ -36,9 +36,6 @@ export interface ProductMechanicalProperties {
   /** Whether another product may be placed above it. */
   stackable: boolean;
 
-  /** Maximum allowable load applied from above (lb). */
-  maxTopLoadLb?: number;
-
   /** Whether the contents may shift internally. */
   contentShiftRisk?: ContentShiftRisk;
 
@@ -64,8 +61,6 @@ export interface SKU {
   packageType?: string;
   /** @deprecated Prefer mechanical.stackable — still honored as override */
   stackable?: boolean;
-  /** @deprecated Prefer mechanical.maxTopLoadLb */
-  maxTopLoad?: number;
   /** Explicit rigidity class; if omitted, inferred from packageType or defaults to rigid */
   rigidityClass?: RigidityClass;
   /** Full mechanical overrides (SKU-specific wins over class defaults) */
@@ -143,7 +138,7 @@ export interface CubingResult {
   failReason?: string;
   /**
    * Physical AABB fit succeeded, but layout depends on high compression,
-   * uncertain soft-package behavior, or defaulted top-load limits.
+   * uncertain soft-package behavior, or soft packages supporting load.
    */
   mechanicalReviewRequired?: boolean;
   mechanicalStatus?: "ok" | "review_required";

@@ -119,7 +119,6 @@ type Box = {
   x2: number; y2: number; z2: number;
   weight: number;
   stackable: boolean;
-  maxTopLoad?: number;
   rigidityClass: RigidityClass;
   placementIdx: number;
 };
@@ -164,17 +163,13 @@ function topLoadOk(
   z: number,
   iL: number,
   iW: number,
-  itemWeight: number,
+  _itemWeight: number,
 ): boolean {
   if (z <= 1e-9) return true;
   const below = supportingBoxes(boxes, x, y, z, iL, iW);
   if (below.length === 0) return false;
   for (const b of below) {
     if (!b.stackable) return false;
-    if (b.maxTopLoad !== undefined && itemWeight > b.maxTopLoad + 1e-9) return false;
-    if (isSoftLike(b.rigidityClass) && (b.maxTopLoad === undefined || b.maxTopLoad <= 0) && itemWeight > 1e-9) {
-      return false;
-    }
   }
   return true;
 }
@@ -435,9 +430,6 @@ function tryBacktrack(
       const { x, y, z, iL, iW, iH } = cand;
       const desc = describeOrientation(sku, iL, iW, iH);
       const warnings: string[] = [];
-      if (mech.missingTopLoadDefaulted) {
-        warnings.push("Missing maxTopLoadLb — defaulted to 0 lb; flag for engineering review");
-      }
       if (cand.compressionRisk === "high") {
         warnings.push("Compression near configured maximum — product stress risk");
       }
@@ -483,7 +475,6 @@ function tryBacktrack(
         z2: z + iH,
         weight: sku.weight,
         stackable: mech.stackable,
-        maxTopLoad: mech.maxTopLoadLb,
         rigidityClass: mech.rigidityClass,
         placementIdx: placements.length - 1,
       };
@@ -552,12 +543,6 @@ function computeTopLoads(placements: Placement[]): void {
       if (overlap) load += q.sku.weight;
     }
     p.topLoadLb = Math.round(load * 100) / 100;
-    const mech = resolveMechanical(p.sku);
-    if (isSoftLike(p.sku) && load > (mech.maxTopLoadLb ?? 0) + 1e-9) {
-      p.engineeringWarnings.push(
-        `Top load ${load.toFixed(1)} lb exceeds maxTopLoadLb ${mech.maxTopLoadLb ?? 0} lb`,
-      );
-    }
     if (isSoftLike(p.sku) && load > 0 && p.rigidityClass === "soft_bag") {
       p.engineeringWarnings.push(
         "Soft package supporting load — prefer rigid base under soft bags",
@@ -678,7 +663,7 @@ export function cubePack(
       cv,
       itemVol > cv
         ? `Combined item volume (${Math.round(itemVol).toLocaleString()} in³) exceeds carton capacity (${Math.round(cv).toLocaleString()} in³)`
-        : "No valid arrangement within allowed compression, retained volume, orientation, and top-load limits",
+        : "No valid arrangement within allowed compression, retained volume, orientation, and stacking rules",
     );
   }
 
@@ -690,12 +675,6 @@ export function cubePack(
       return emptyFail(
         cv,
         `Non-stackable package "${p.sku.name}" cannot support ${p.topLoadLb} lb top load`,
-      );
-    }
-    if (mech.maxTopLoadLb !== undefined && p.topLoadLb > mech.maxTopLoadLb + 1e-9) {
-      return emptyFail(
-        cv,
-        `Top-load limit exceeded on "${p.sku.name}" — ${p.topLoadLb} lb > ${mech.maxTopLoadLb} lb`,
       );
     }
   }
@@ -757,10 +736,9 @@ export function cubePack(
       (p) =>
         p.compressionRisk === "high" ||
         p.compressionRisk === "medium" ||
-        resolveMechanical(p.sku).missingTopLoadDefaulted ||
         shapeRecoveryRisk(p) ||
         (isSoftLike(p.sku) && p.topLoadLb > 0),
-    ) || mechanicalWarnings.some((w) => /defaulted|High compression|Shape-recovery|Top load/i.test(w));
+    ) || mechanicalWarnings.some((w) => /High compression|Shape-recovery|Top load|Soft package supporting/i.test(w));
 
   const flexReports: FlexPackReport[] = placements
     .filter((p) => p.rigidityClass !== "rigid")

@@ -52,7 +52,6 @@ describe("rigidity defaults & overrides", () => {
         minimumRetainedVolumePercent: 90,
         canConformToVoid: false,
         stackable: true,
-        maxTopLoadLb: 2,
       },
     });
     const m = resolveMechanical(s);
@@ -60,11 +59,9 @@ describe("rigidity defaults & overrides", () => {
     expect(m.minimumRetainedVolumePercent).toBe(90);
     expect(m.canConformToVoid).toBe(false);
     expect(m.stackable).toBe(true);
-    expect(m.maxTopLoadLb).toBe(2);
-    expect(m.missingTopLoadDefaulted).toBe(false);
   });
 
-  it("soft_bag missing top load defaults to 0 and flags review", () => {
+  it("soft_bag defaults to non-stackable with class compression limits", () => {
     const s = sku({
       id: "B1",
       name: "Bag",
@@ -74,8 +71,6 @@ describe("rigidity defaults & overrides", () => {
       rigidityClass: "soft_bag",
     });
     const m = resolveMechanical(s);
-    expect(m.maxTopLoadLb).toBe(0);
-    expect(m.missingTopLoadDefaulted).toBe(true);
     expect(m.stackable).toBe(false);
     expect(m.maxCompressionPercent).toEqual(RIGIDITY_DEFAULTS.soft_bag.maxCompressionPercent);
   });
@@ -150,7 +145,7 @@ describe("cubePack — soft bag with rigid cartons", () => {
       height: 2.5,
       weight: 0.4,
       rigidityClass: "soft_bag",
-      mechanical: { maxTopLoadLb: 0, stackable: false },
+      mechanical: { stackable: false },
     });
     const c = carton({ id: "C2", length: 16, width: 10, height: 6 });
     const r = cubePack(
@@ -189,7 +184,7 @@ describe("cubePack — multiple flexible packages", () => {
         height: 2,
         weight: 0.5,
         rigidityClass: "flexible",
-        mechanical: { maxTopLoadLb: 0, stackable: false },
+        mechanical: { stackable: false },
       });
     const c = carton({ id: "C3", length: 14, width: 10, height: 6 });
     const r = cubePack(
@@ -219,7 +214,6 @@ describe("axis-specific compression & modest vs excessive", () => {
       mechanical: {
         maxCompressionPercent: { length: 0, width: 0, height: 30 },
         minimumRetainedVolumePercent: 70,
-        maxTopLoadLb: 0,
         stackable: false,
         canConformToVoid: true,
       },
@@ -246,7 +240,6 @@ describe("axis-specific compression & modest vs excessive", () => {
       mechanical: {
         maxCompressionPercent: { length: 5, width: 5, height: 10 },
         minimumRetainedVolumePercent: 85,
-        maxTopLoadLb: 0,
         stackable: false,
       },
     });
@@ -267,7 +260,7 @@ describe("stacking & top load", () => {
       height: 2,
       weight: 0.5,
       rigidityClass: "soft_bag",
-      mechanical: { stackable: false, maxTopLoadLb: 0 },
+      mechanical: { stackable: false },
     });
     const heavy = sku({
       id: "HVY",
@@ -296,7 +289,7 @@ describe("stacking & top load", () => {
     }
   });
 
-  it("enforces zero allowable top load on soft packages", () => {
+  it("rejects stacking on soft packages that are not stackable", () => {
     const bag = sku({
       id: "BAG-0",
       name: "Zero load bag",
@@ -305,7 +298,7 @@ describe("stacking & top load", () => {
       height: 3,
       weight: 0.5,
       rigidityClass: "soft_bag",
-      mechanical: { stackable: true, maxTopLoadLb: 0 },
+      mechanical: { stackable: false },
     });
     const rigid = sku({
       id: "R2",
@@ -358,7 +351,6 @@ describe("void conformity & shape recovery", () => {
         maxCompressionPercent: { length: 5, width: 20, height: 10 },
         minimumRetainedVolumePercent: 75,
         canConformToVoid: true,
-        maxTopLoadLb: 0,
         stackable: false,
       },
     });
@@ -388,7 +380,6 @@ describe("void conformity & shape recovery", () => {
         maxCompressionPercent: { length: 0, width: 0, height: 30 },
         minimumRetainedVolumePercent: 70,
         canConformToVoid: true,
-        maxTopLoadLb: 0,
         contentShiftRisk: "high",
         stackable: false,
       },
@@ -407,14 +398,21 @@ describe("engineering score separation", () => {
     const bag = sku({
       id: "REV",
       name: "Review bag",
-      length: 8,
-      width: 6,
-      height: 2,
+      length: 10,
+      width: 8,
+      height: 3,
       weight: 0.4,
       rigidityClass: "soft_bag",
-      // missing maxTopLoad → default 0 → mechanical review flag
+      mechanical: {
+        maxCompressionPercent: { length: 0, width: 0, height: 30 },
+        minimumRetainedVolumePercent: 70,
+        canConformToVoid: true,
+        contentShiftRisk: "high",
+        stackable: false,
+      },
     });
-    const c = carton({ id: "C10", length: 10, width: 8, height: 4 });
+    // Tight height forces medium/high compression → mechanical review
+    const c = carton({ id: "C10", length: 11, width: 9, height: 2.2 });
     const r = cubePack([{ sku: bag, qty: 1 }], c);
     expect(r.fits).toBe(true);
     expect(r.mechanicalReviewRequired).toBe(true);

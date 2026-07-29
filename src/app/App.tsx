@@ -1025,7 +1025,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
                 Fits — Mechanical Review Required
               </div>
               <p className="text-[11px] leading-relaxed" style={{ color: "#78350f" }}>
-                Physical fit succeeded, but the layout depends on flexible/soft package compression, defaulted top-load limits, or shape-recovery risk. Engineering quality is scored separately from geometric fit.
+                Physical fit succeeded, but the layout depends on flexible/soft package compression, soft packages supporting load, or shape-recovery risk. Engineering quality is scored separately from geometric fit.
               </p>
               {(aiCubing.mechanicalWarnings?.length ?? 0) > 0 && (
                 <ul className="mt-2 space-y-0.5 text-[10px]" style={{ fontFamily: MONO, color: "#92400e" }}>

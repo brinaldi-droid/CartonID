@@ -8,7 +8,7 @@ import type {
   RankedOption,
 } from "./types";
 import { cubePack, DUNNAGE_PCT, FIT_TOL, vol, minCompressedCatalogDims } from "./packing";
-import { resolveMechanical } from "./rigidity";
+import { isSoftLike, resolveMechanical } from "./rigidity";
 
 export { DUNNAGE_PCT, FIT_TOL, cubePack, vol, describeOrientation, orientations3, resolveMechanical, inferRigidityClass, minCompressedCatalogDims } from "./packing";
 export { parseWorkbookToSKUs, parseWorkbookToCartons, readCsv, pickCol } from "./parsers";
@@ -214,15 +214,14 @@ export function scoreCarton(c: Carton, items: OrderItem[]): EngineeringScore {
     const riskMap = { none: 0, low: 25, medium: 55, high: 90 };
     compressionRiskAcc += riskMap[p.compressionRisk];
     const mech = resolveMechanical(p.sku);
-    const maxLoad = mech.maxTopLoadLb ?? 0;
     topLoadRiskAcc +=
-      maxLoad <= 0
-        ? p.topLoadLb > 0
-          ? 100
-          : mech.missingTopLoadDefaulted
-            ? 35
-            : 10
-        : Math.min(100, (p.topLoadLb / maxLoad) * 100);
+      isSoftLike(p.sku) && p.topLoadLb > 0
+        ? 100
+        : !mech.stackable && p.topLoadLb > 0
+          ? 90
+          : p.topLoadLb > 0
+            ? 25
+            : 5;
     const shift = mech.contentShiftRisk ?? "low";
     migrationRiskAcc += shift === "high" ? 80 : shift === "medium" ? 45 : 15;
     if (p.conformsToVoid && (p.compressionRisk === "medium" || p.compressionRisk === "high")) {

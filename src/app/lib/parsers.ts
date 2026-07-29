@@ -119,7 +119,6 @@ export function parseWorkbookToSKUs(wb: XLSX.WorkBook): ParseResult<SKU> {
     const minRetVol = parseNum(pickCol(r, "Min Retained Volume %", "MinimumRetainedVolumePercent", "MinRetainedVol"));
     const canConform = toBool(pickCol(r, "Can Conform To Void", "CanConformToVoid", "Conform Void"));
     const contentShift = String(pickCol(r, "Content Shift Risk", "ContentShiftRisk") ?? "").trim().toLowerCase();
-    const maxTop = parseNum(pickCol(r, "Max Top Load", "MaxTopLoad", "Top Load", "Max Top Load Lb"));
 
     const mechanical: SKU["mechanical"] = {};
     if (rigidityClass) mechanical.rigidityClass = rigidityClass;
@@ -135,7 +134,6 @@ export function parseWorkbookToSKUs(wb: XLSX.WorkBook): ParseResult<SKU> {
     if (contentShift === "low" || contentShift === "medium" || contentShift === "high") {
       mechanical.contentShiftRisk = contentShift;
     }
-    if (Number.isFinite(maxTop) && maxTop >= 0) mechanical.maxTopLoadLb = maxTop;
     const stackable = toBool(pickCol(r, "Stackable", "Can Stack"));
     if (stackable !== undefined) mechanical.stackable = stackable;
 
@@ -152,7 +150,6 @@ export function parseWorkbookToSKUs(wb: XLSX.WorkBook): ParseResult<SKU> {
       keepFlat: toBool(pickCol(r, "Keep Flat", "KeepFlat", "Flat Only")),
       keepUpright: toBool(pickCol(r, "Keep Upright", "KeepUpright", "Upright Only", "This Side Up")),
       stackable,
-      maxTopLoad: Number.isFinite(maxTop) && maxTop > 0 ? maxTop : undefined,
       rigidityClass,
       mechanical: Object.keys(mechanical).length ? mechanical : undefined,
     });

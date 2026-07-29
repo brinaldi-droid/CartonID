@@ -23,7 +23,6 @@ export const RIGIDITY_DEFAULTS: Record<
     maxCompressionPercent: { length: 5, width: 5, height: 15 },
     canConformToVoid: true,
     stackable: false,
-    maxTopLoadLb: 0,
     contentShiftRisk: "medium",
     minimumRetainedVolumePercent: 85,
   },
@@ -31,7 +30,6 @@ export const RIGIDITY_DEFAULTS: Record<
     maxCompressionPercent: { length: 10, width: 10, height: 30 },
     canConformToVoid: true,
     stackable: false,
-    maxTopLoadLb: 0,
     contentShiftRisk: "high",
     minimumRetainedVolumePercent: 70,
   },
@@ -54,11 +52,9 @@ export function inferRigidityClass(sku: Pick<SKU, "rigidityClass" | "packageType
 
 /**
  * Resolve full mechanical properties with SKU overrides on top of class defaults.
- * Missing soft/flexible maxTopLoadLb defaults to 0 and is flagged by callers for review.
  */
 export function resolveMechanical(sku: SKU): ProductMechanicalProperties & {
   minimumRetainedVolumePercent: number;
-  missingTopLoadDefaulted: boolean;
 } {
   const rigidityClass = inferRigidityClass(sku);
   const base = RIGIDITY_DEFAULTS[rigidityClass];
@@ -75,29 +71,15 @@ export function resolveMechanical(sku: SKU): ProductMechanicalProperties & {
     sku.stackable ??
     base.stackable;
 
-  const explicitTopLoad =
-    m?.maxTopLoadLb !== undefined || sku.maxTopLoad !== undefined;
-  let maxTopLoadLb = m?.maxTopLoadLb ?? sku.maxTopLoad ?? base.maxTopLoadLb;
-  let missingTopLoadDefaulted = false;
-  if (
-    (rigidityClass === "soft_bag" || rigidityClass === "flexible") &&
-    !explicitTopLoad
-  ) {
-    maxTopLoadLb = maxTopLoadLb ?? 0;
-    missingTopLoadDefaulted = true;
-  }
-
   return {
     rigidityClass,
     maxCompressionPercent,
     minimumDimensions: m?.minimumDimensions,
     canConformToVoid: m?.canConformToVoid ?? base.canConformToVoid,
     stackable,
-    maxTopLoadLb,
     contentShiftRisk: m?.contentShiftRisk ?? base.contentShiftRisk,
     minimumRetainedVolumePercent:
       m?.minimumRetainedVolumePercent ?? base.minimumRetainedVolumePercent,
-    missingTopLoadDefaulted,
   };
 }
 
