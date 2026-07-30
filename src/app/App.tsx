@@ -33,6 +33,7 @@ import {
   readCsv,
 } from "./lib/engine";
 import { CubingDiagram } from "./lib/CubingDiagram";
+import { ExecutiveDashboard } from "./ExecutiveDashboard";
 
 // ── Brand palette ─────────────────────────────────────────────────────────────
 const C = {
@@ -53,7 +54,7 @@ const SERIF = "'ITC Officina Serif', 'Bitter', Georgia, serif";
 const MONO  = "'JetBrains Mono', monospace";
 
 // ── Local app types ───────────────────────────────────────────────────────────
-type Screen = "home" | "order" | "recommendation" | "settings" | "analytics";
+type Screen = "home" | "order" | "recommendation" | "settings" | "analytics" | "executive";
 
 interface AnalysisItemSnapshot {
   skuId: string;
@@ -95,6 +96,10 @@ interface AnalysisRecord {
   sustainability: number;
   score: number;
   confirmedWms: boolean;
+  /** Carton volumes (in³) for ROI / corrugate / space-cost analytics */
+  wmsVolume?: number;
+  aiVolume?: number;
+  wmsVoidPct?: number;
   /** Full breakdown snapshot — older history entries may omit this */
   breakdown?: {
     items: AnalysisItemSnapshot[];
@@ -638,6 +643,9 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
       sustainability: score.sustainability,
       score: score.total,
       confirmedWms: aiMatch,
+      wmsVolume: wmsVol,
+      aiVolume: aiVol,
+      wmsVoidPct: wmsCubing.fits ? wmsCubing.voidPct : undefined,
       breakdown: {
         items: items.map(({ sku, qty }) => ({
           skuId: sku.id,
@@ -1963,6 +1971,7 @@ export default function App() {
   const nav = [
     { id: "home" as Screen,      label: "Home" },
     { id: "order" as Screen,     label: "New Order" },
+    { id: "executive" as Screen, label: "Executive Dashboard" },
     { id: "analytics" as Screen, label: "Analytics" },
     { id: "settings" as Screen,  label: "Admin" },
   ];
@@ -2018,6 +2027,7 @@ export default function App() {
             <span className="text-xs" style={{ fontFamily: MONO, color: C.navy }}>
               {screen === "order" ? "Order Builder"
                 : screen === "recommendation" ? "Recommendation"
+                : screen === "executive" ? "Executive Dashboard"
                 : screen === "analytics" ? "Analytics"
                 : "Admin / Settings"}
             </span>
@@ -2027,11 +2037,14 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 overflow-y-auto">
-        <div className="max-w-5xl mx-auto px-6 py-8">
+        <div className={`${screen === "executive" ? "max-w-6xl" : "max-w-5xl"} mx-auto px-6 py-8`}>
           {screen === "home"           && <HomeScreen onNewOrder={goOrder} />}
           {screen === "order"          && <OrderScreen skuDb={skuDb} cartons={cartons} onAnalyze={handleAnalyze} />}
           {screen === "recommendation" && order && (
             <RecommendationScreen items={order} cartons={cartons} wmsCartonId={wmsCartonId} onBack={goOrder} onRecorded={handleRecorded} />
+          )}
+          {screen === "executive"      && (
+            <ExecutiveDashboard history={history} catalogCartonCount={cartons.length} />
           )}
           {screen === "analytics"      && <AnalyticsScreen history={history} onClear={clearHistory} />}
           {screen === "settings"       && (
