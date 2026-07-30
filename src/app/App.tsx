@@ -567,7 +567,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
       (wmsCartonId ? cartons.find((c) => c.id === wmsCartonId) : null) ??
       calcManhattan(items, cartons);
     const wmsIsManual = wmsCartonId != null && cartons.some((c) => c.id === wmsCartonId);
-    const { carton: ai, score, noFit, candidateCount, minRequired, cubing, custom, customDecision } = calcAI(items, cartons);
+    const { carton: ai, score, noFit, candidateCount, minRequired, cubing, custom } = calcAI(items, cartons);
     const aiCubing = noFit ? null : cubing ?? cubePack(items, ai);
     const wmsCubing = cubePack(items, manhattan);
     const manhattanScore = scoreCarton(manhattan, items, wmsCubing);
@@ -583,7 +583,6 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
       wmsCubing,
       manhattanScore,
       custom,
-      customDecision,
     };
   }, [items, cartons, wmsCartonId]);
 
@@ -599,7 +598,6 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
     wmsCubing,
     manhattanScore,
     custom,
-    customDecision,
   } = analysis;
 
   const savings         = manhattan.cost - ai.cost;
@@ -766,7 +764,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
       )}
 
       {/* ── Side-by-side comparison ───────────────────────────────────────────── */}
-      <div className={`grid grid-cols-1 gap-4 ${custom || customDecision.status === "evaluated-not-beneficial" ? "md:grid-cols-2 xl:grid-cols-3" : "md:grid-cols-2"}`}>
+      <div className={`grid grid-cols-1 gap-4 ${custom ? "md:grid-cols-2 xl:grid-cols-3" : "md:grid-cols-2"}`}>
 
         {/* WMS column — always shows raw cubing metrics, score if available */}
         <Card style={{ borderColor: C.violet + "40" }}>
@@ -1074,24 +1072,6 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
                   </div>
                 ))}
               </div>
-            </div>
-          </Card>
-        )}
-
-        {!noFit && !custom && customDecision.status === "evaluated-not-beneficial" && (
-          <Card style={{ borderColor: C.teal + "40" }}>
-            <div className="h-1 rounded-t-lg" style={{ background: C.teal }} />
-            <div className="p-5">
-              <div className="flex items-center gap-2 mb-2">
-                <CheckCircle2 size={16} style={{ color: C.teal }} />
-                <span className="text-[11px] uppercase tracking-widest font-semibold" style={{ fontFamily: MONO, color: C.teal }}>
-                  Best Available Packsize Carton
-                </span>
-              </div>
-              <p className="text-sm leading-relaxed" style={{ color: C.navy }}>
-                A custom carton was evaluated but did not provide sufficient engineering or financial benefit over the
-                recommended Packsize carton.
-              </p>
             </div>
           </Card>
         )}
