@@ -6,7 +6,7 @@ import {
   ScanBarcode, Plus, Trash2, Settings, ChevronRight, ChevronLeft,
   AlertTriangle, CheckCircle2, Zap, ArrowRight, Package,
   Upload, RefreshCw, X, RotateCcw, Layers, BarChart3,
-  Pencil, Save, Leaf, TrendingDown, Box,
+  Pencil, Save, Leaf, TrendingDown, Box, Download,
 } from "lucide-react";
 import {
   type SKU,
@@ -54,7 +54,7 @@ const SERIF = "'ITC Officina Serif', 'Bitter', Georgia, serif";
 const MONO  = "'JetBrains Mono', monospace";
 
 // ── Local app types ───────────────────────────────────────────────────────────
-type Screen = "home" | "order" | "recommendation" | "settings" | "analytics" | "executive";
+type Screen = "home" | "order" | "recommendation" | "settings" | "analytics" | "total-analytics" | "executive";
 
 interface AnalysisItemSnapshot {
   skuId: string;
@@ -137,6 +137,12 @@ interface AnalysisRecord {
 }
 
 const HISTORY_KEY = "cartoniq-analysis-history";
+/** Full archive kept for Total Analytics (localStorage quota permitting). */
+const HISTORY_ARCHIVE_LIMIT = 5000;
+/** Session Analytics dashboard shows only the most recent N analyses. */
+const SESSION_ANALYTICS_LIMIT = 50;
+/** Session Analytics shows only the top N custom carton sizes. */
+const SESSION_CUSTOM_TOP = 5;
 
 function loadHistory(): AnalysisRecord[] {
   try {
@@ -151,8 +157,58 @@ function loadHistory(): AnalysisRecord[] {
 
 function saveHistory(records: AnalysisRecord[]) {
   try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(records.slice(0, 50)));
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(records.slice(0, HISTORY_ARCHIVE_LIMIT)));
   } catch { /* ignore quota */ }
+}
+
+interface CustomSizeStat {
+  key: string;
+  length: number;
+  width: number;
+  height: number;
+  volume: number;
+  count: number;
+  totalScore: number;
+  lastAt: string;
+}
+
+function aggregateCustomSizes(history: AnalysisRecord[]): CustomSizeStat[] {
+  const map = new Map<string, CustomSizeStat>();
+  for (const h of history) {
+    const c = h.customRecommended;
+    if (!c) continue;
+    const key = `${c.length}×${c.width}×${c.height}`;
+    const prev = map.get(key);
+    if (prev) {
+      prev.count += 1;
+      prev.totalScore += c.score;
+      if (h.at > prev.lastAt) prev.lastAt = h.at;
+    } else {
+      map.set(key, {
+        key,
+        length: c.length,
+        width: c.width,
+        height: c.height,
+        volume: c.volume,
+        count: 1,
+        totalScore: c.score,
+        lastAt: h.at,
+      });
+    }
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count || b.volume - a.volume);
+}
+
+function analyticsKpis(history: AnalysisRecord[]) {
+  const n = history.length;
+  const totalSavings = history.reduce((s, h) => s + h.savings, 0);
+  const avgUtil = n ? Math.round(history.reduce((s, h) => s + h.utilization, 0) / n) : 0;
+  const avgSustain = n ? Math.round(history.reduce((s, h) => s + h.sustainability, 0) / n) : 0;
+  const avgDimDelta = n ? history.reduce((s, h) => s + h.dimWeightDelta, 0) / n : 0;
+  const confirmRate = n ? Math.round((history.filter((h) => h.confirmedWms).length / n) * 100) : 0;
+  const overrides = history.filter((h) => !h.confirmedWms).length;
+  const customRecommendCount = history.filter((h) => h.customRecommended).length;
+  return { n, totalSavings, avgUtil, avgSustain, avgDimDelta, confirmRate, overrides, customRecommendCount };
 }
 
 const skuParsed = parseWorkbookToSKUs(readCsv(defaultSkuCsv));
@@ -1620,57 +1676,17 @@ function AnalysisDetailView({ record, onBack }: { record: AnalysisRecord; onBack
 
 function AnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onClear: () => void }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = history.find((h) => h.id === selectedId) ?? null;
+  // Session view: most recent 50 only
+  const sessionHistory = history.slice(0, SESSION_ANALYTICS_LIMIT);
+  const selected = sessionHistory.find((h) => h.id === selectedId) ?? null;
 
   if (selected) {
     return <AnalysisDetailView record={selected} onBack={() => setSelectedId(null)} />;
   }
 
-  const n = history.length;
-  const totalSavings = history.reduce((s, h) => s + h.savings, 0);
-  const avgUtil = n ? Math.round(history.reduce((s, h) => s + h.utilization, 0) / n) : 0;
-  const avgSustain = n ? Math.round(history.reduce((s, h) => s + h.sustainability, 0) / n) : 0;
-  const avgDimDelta = n ? history.reduce((s, h) => s + h.dimWeightDelta, 0) / n : 0;
-  const confirmRate = n ? Math.round((history.filter((h) => h.confirmedWms).length / n) * 100) : 0;
-  const overrides = history.filter((h) => !h.confirmedWms).length;
-
-  const customSizeStats = (() => {
-    type Agg = {
-      key: string;
-      length: number;
-      width: number;
-      height: number;
-      volume: number;
-      count: number;
-      totalScore: number;
-      lastAt: string;
-    };
-    const map = new Map<string, Agg>();
-    for (const h of history) {
-      const c = h.customRecommended;
-      if (!c) continue;
-      const key = `${c.length}×${c.width}×${c.height}`;
-      const prev = map.get(key);
-      if (prev) {
-        prev.count += 1;
-        prev.totalScore += c.score;
-        if (h.at > prev.lastAt) prev.lastAt = h.at;
-      } else {
-        map.set(key, {
-          key,
-          length: c.length,
-          width: c.width,
-          height: c.height,
-          volume: c.volume,
-          count: 1,
-          totalScore: c.score,
-          lastAt: h.at,
-        });
-      }
-    }
-    return [...map.values()].sort((a, b) => b.count - a.count || b.volume - a.volume);
-  })();
-  const customRecommendCount = history.filter((h) => h.customRecommended).length;
+  const { n, totalSavings, avgUtil, avgSustain, avgDimDelta, confirmRate, overrides, customRecommendCount } =
+    analyticsKpis(sessionHistory);
+  const customSizeStats = aggregateCustomSizes(sessionHistory).slice(0, SESSION_CUSTOM_TOP);
 
   return (
     <div className="flex flex-col gap-5 max-w-4xl mx-auto w-full">
@@ -1678,10 +1694,10 @@ function AnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onCl
         <div>
           <h2 style={{ fontFamily: SERIF, color: C.navy, fontSize: 24 }} className="font-semibold mb-1">Analytics</h2>
           <p className="text-sm" style={{ color: C.slate }}>
-            Session KPIs from analyzed orders — click a row to open the full breakdown.
+            Last {SESSION_ANALYTICS_LIMIT} analyses · top {SESSION_CUSTOM_TOP} custom sizes. Open Total Analytics for the full archive.
           </p>
         </div>
-        {n > 0 && (
+        {history.length > 0 && (
           <button onClick={onClear}
             className="text-xs px-3 py-1.5 rounded border shrink-0"
             style={{ fontFamily: MONO, borderColor: C.border, color: C.slate }}>
@@ -1692,7 +1708,7 @@ function AnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onCl
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         {[
-          { label: "Analyses", value: String(n), sub: "orders scored" },
+          { label: "Analyses", value: String(n), sub: `of last ${SESSION_ANALYTICS_LIMIT}` },
           { label: "Carton Cost Saved", value: `$${totalSavings.toFixed(2)}`, sub: "vs WMS cartons" },
           { label: "Avg Utilization", value: `${avgUtil}%`, sub: "AI recommendations" },
           { label: "Avg Sustainability", value: `${avgSustain}/100`, sub: "dunnage efficiency" },
@@ -1706,77 +1722,28 @@ function AnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onCl
         ))}
       </div>
 
-      {/* Custom carton demand — master-list candidates */}
       <Card>
         <div className="px-5 py-3 border-b flex flex-wrap items-center justify-between gap-2" style={{ borderColor: C.border, background: C.bgSoft }}>
           <div>
             <span className="text-[10px] uppercase tracking-widest" style={{ fontFamily: MONO, color: C.slate }}>
-              Custom Cartons
+              Custom Cartons (Top {SESSION_CUSTOM_TOP})
             </span>
             <p className="text-[11px] mt-0.5" style={{ color: C.slate }}>
-              Most common made-to-order sizes that cleared improvement thresholds — candidates for the Packsize master list.
+              Most common made-to-order sizes in the last {SESSION_ANALYTICS_LIMIT} analyses.
             </p>
           </div>
           <span className="text-[10px]" style={{ fontFamily: MONO, color: C.teal }}>
-            {customRecommendCount} recommendation{customRecommendCount !== 1 ? "s" : ""} · {customSizeStats.length} unique size{customSizeStats.length !== 1 ? "s" : ""}
+            {customRecommendCount} recommendation{customRecommendCount !== 1 ? "s" : ""} in session
           </span>
         </div>
         {customSizeStats.length === 0 ? (
           <div className="px-5 py-8 text-center">
             <p className="text-sm" style={{ color: C.slate }}>
-              No custom carton recommendations yet. When CartonIQ proposes a custom size that beats Packsize, it will appear here.
+              No custom carton recommendations in the last {SESSION_ANALYTICS_LIMIT} analyses.
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b" style={{ borderColor: C.border }}>
-                  {["Rank", "Dimensions (L×W×H)", "Volume", "Times recommended", "Share", "Avg eng. score", "Last seen"].map((h) => (
-                    <th key={h} className="text-left px-4 py-2 text-[10px] uppercase tracking-wider"
-                      style={{ fontFamily: MONO, color: C.slate }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {customSizeStats.map((row, i) => {
-                  const share = customRecommendCount
-                    ? Math.round((row.count / customRecommendCount) * 100)
-                    : 0;
-                  return (
-                    <tr key={row.key} className="border-b last:border-0" style={{ borderColor: C.border }}>
-                      <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.slate }}>
-                        #{i + 1}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.navy }}>
-                        {row.length} × {row.width} × {row.height} in
-                      </td>
-                      <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.slate }}>
-                        {Math.round(row.volume).toLocaleString()} in³
-                      </td>
-                      <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.teal }}>
-                        {row.count}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.navy }}>
-                        <div className="flex items-center gap-2 min-w-[100px]">
-                          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: C.bgMuted }}>
-                            <div className="h-full rounded-full" style={{ width: `${share}%`, background: C.cyan }} />
-                          </div>
-                          <span>{share}%</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.navy }}>
-                        {Math.round(row.totalScore / row.count)}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.slate }}>
-                        {new Date(row.lastAt).toLocaleString()}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <CustomSizesTable rows={customSizeStats} recommendCount={customRecommendCount} />
         )}
       </Card>
 
@@ -1786,59 +1753,310 @@ function AnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onCl
           <p className="text-sm" style={{ color: C.slate }}>Run an order analysis to populate analytics.</p>
         </div>
       ) : (
-        <Card>
-          <div className="px-5 py-3 border-b" style={{ borderColor: C.border, background: C.bgSoft }}>
+        <AnalysesTable history={sessionHistory} onSelect={setSelectedId} title={`Recent Analyses (last ${SESSION_ANALYTICS_LIMIT})`} />
+      )}
+    </div>
+  );
+}
+
+function CustomSizesTable({
+  rows,
+  recommendCount,
+}: {
+  rows: CustomSizeStat[];
+  recommendCount: number;
+}) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b" style={{ borderColor: C.border }}>
+            {["Rank", "Dimensions (L×W×H)", "Volume", "Times recommended", "Share", "Avg eng. score", "Last seen"].map((h) => (
+              <th key={h} className="text-left px-4 py-2 text-[10px] uppercase tracking-wider"
+                style={{ fontFamily: MONO, color: C.slate }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => {
+            const share = recommendCount ? Math.round((row.count / recommendCount) * 100) : 0;
+            return (
+              <tr key={row.key} className="border-b last:border-0" style={{ borderColor: C.border }}>
+                <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.slate }}>#{i + 1}</td>
+                <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.navy }}>
+                  {row.length} × {row.width} × {row.height} in
+                </td>
+                <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.slate }}>
+                  {Math.round(row.volume).toLocaleString()} in³
+                </td>
+                <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.teal }}>{row.count}</td>
+                <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.navy }}>
+                  <div className="flex items-center gap-2 min-w-[100px]">
+                    <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: C.bgMuted }}>
+                      <div className="h-full rounded-full" style={{ width: `${share}%`, background: C.cyan }} />
+                    </div>
+                    <span>{share}%</span>
+                  </div>
+                </td>
+                <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.navy }}>
+                  {Math.round(row.totalScore / row.count)}
+                </td>
+                <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.slate }}>
+                  {new Date(row.lastAt).toLocaleString()}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function AnalysesTable({
+  history,
+  onSelect,
+  title,
+}: {
+  history: AnalysisRecord[];
+  onSelect?: (id: string) => void;
+  title: string;
+}) {
+  return (
+    <Card>
+      <div className="px-5 py-3 border-b" style={{ borderColor: C.border, background: C.bgSoft }}>
+        <span className="text-[10px] uppercase tracking-widest" style={{ fontFamily: MONO, color: C.slate }}>
+          {title}
+        </span>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead>
+            <tr className="border-b" style={{ borderColor: C.border }}>
+              {["When", "Order", "WMS", "AI", "Custom", "Savings", "Util", "Score", ...(onSelect ? [""] : [])].map((h) => (
+                <th key={h || "go"} className="text-left px-4 py-2 text-[10px] uppercase tracking-wider"
+                  style={{ fontFamily: MONO, color: C.slate }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((h) => (
+              <tr
+                key={h.id}
+                onClick={onSelect ? () => onSelect(h.id) : undefined}
+                className={`border-b last:border-0 ${onSelect ? "cursor-pointer transition-colors" : ""}`}
+                style={{ borderColor: C.border }}
+                onMouseEnter={onSelect ? (e) => { e.currentTarget.style.background = C.bgSoft; } : undefined}
+                onMouseLeave={onSelect ? (e) => { e.currentTarget.style.background = "transparent"; } : undefined}
+              >
+                <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.slate }}>
+                  {new Date(h.at).toLocaleString()}
+                </td>
+                <td className="px-4 py-2.5 text-xs" style={{ color: C.navy }}>
+                  {h.unitCount} units · {h.skuCount} SKUs
+                </td>
+                <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.violet }}>{h.wmsCarton}</td>
+                <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.teal }}>{h.aiCarton}</td>
+                <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: h.customRecommended ? C.cyan : C.slate }}>
+                  {h.customRecommended
+                    ? `${h.customRecommended.length}×${h.customRecommended.width}×${h.customRecommended.height}`
+                    : "—"}
+                </td>
+                <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: h.savings > 0 ? C.teal : C.slate }}>
+                  ${h.savings.toFixed(2)}
+                </td>
+                <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.navy }}>{h.utilization}%</td>
+                <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.navy }}>{h.score}</td>
+                {onSelect && (
+                  <td className="px-4 py-2.5">
+                    <ChevronRight size={14} style={{ color: C.teal }} />
+                  </td>
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function downloadTotalAnalytics(history: AnalysisRecord[]) {
+  const kpis = analyticsKpis(history);
+  const customs = aggregateCustomSizes(history);
+
+  const summaryRows = [
+    { Metric: "Total analyses", Value: kpis.n },
+    { Metric: "Carton cost saved ($)", Value: Number(kpis.totalSavings.toFixed(2)) },
+    { Metric: "Avg utilization (%)", Value: kpis.avgUtil },
+    { Metric: "Avg sustainability (/100)", Value: kpis.avgSustain },
+    { Metric: "Avg dim-weight delta (lb)", Value: Number(kpis.avgDimDelta.toFixed(2)) },
+    { Metric: "Custom recommendations", Value: kpis.customRecommendCount },
+    { Metric: "Unique custom sizes", Value: customs.length },
+    { Metric: "AI overrides", Value: kpis.overrides },
+    { Metric: "WMS confirm rate (%)", Value: kpis.confirmRate },
+  ];
+
+  const analysisRows = history.map((h) => ({
+    When: h.at,
+    Units: h.unitCount,
+    SKUs: h.skuCount,
+    Category: h.category ?? "",
+    "WMS carton": h.wmsCarton,
+    "AI carton": h.aiCarton,
+    "Custom L": h.customRecommended?.length ?? "",
+    "Custom W": h.customRecommended?.width ?? "",
+    "Custom H": h.customRecommended?.height ?? "",
+    "Custom volume": h.customRecommended?.volume ?? "",
+    "Savings ($)": Number(h.savings.toFixed(2)),
+    "Utilization (%)": h.utilization,
+    "Void (%)": h.voidPct,
+    Sustainability: h.sustainability,
+    Score: h.score,
+    "Confirms WMS": h.confirmedWms ? "Yes" : "No",
+  }));
+
+  const customRows = customs.map((c, i) => ({
+    Rank: i + 1,
+    "Length (in)": c.length,
+    "Width (in)": c.width,
+    "Height (in)": c.height,
+    "Volume (in³)": Math.round(c.volume),
+    "Times recommended": c.count,
+    "Share (%)": kpis.customRecommendCount
+      ? Math.round((c.count / kpis.customRecommendCount) * 100)
+      : 0,
+    "Avg eng. score": Math.round(c.totalScore / c.count),
+    "Last seen": c.lastAt,
+  }));
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(summaryRows), "Summary");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(analysisRows), "All Analyses");
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(customRows), "Custom Cartons");
+  XLSX.writeFile(wb, `cartoniq-total-analytics-${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+function TotalAnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onClear: () => void }) {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = history.find((h) => h.id === selectedId) ?? null;
+
+  if (selected) {
+    return <AnalysisDetailView record={selected} onBack={() => setSelectedId(null)} />;
+  }
+
+  const { n, totalSavings, avgUtil, avgSustain, avgDimDelta, confirmRate, overrides, customRecommendCount } =
+    analyticsKpis(history);
+  const customSizeStats = aggregateCustomSizes(history);
+
+  return (
+    <div className="flex flex-col gap-5 max-w-5xl mx-auto w-full">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 style={{ fontFamily: SERIF, color: C.navy, fontSize: 24 }} className="font-semibold mb-1">
+            Total Analytics
+          </h2>
+          <p className="text-sm" style={{ color: C.slate }}>
+            Full archive — all analyses, KPIs, and every custom carton size recommended.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {n > 0 && (
+            <button
+              type="button"
+              onClick={() => downloadTotalAnalytics(history)}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded border"
+              style={{ fontFamily: MONO, borderColor: C.teal + "60", color: C.teal, background: C.teal + "10" }}
+            >
+              <Download size={12} /> Download data
+            </button>
+          )}
+          {n > 0 && (
+            <button
+              type="button"
+              onClick={onClear}
+              className="text-xs px-3 py-1.5 rounded border"
+              style={{ fontFamily: MONO, borderColor: C.border, color: C.slate }}
+            >
+              Clear history
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {[
+          { label: "All Analyses", value: String(n), sub: `archive up to ${HISTORY_ARCHIVE_LIMIT}` },
+          { label: "Carton Cost Saved", value: `$${totalSavings.toFixed(2)}`, sub: "vs WMS cartons" },
+          { label: "Avg Utilization", value: `${avgUtil}%`, sub: "AI recommendations" },
+          { label: "Avg Sustainability", value: `${avgSustain}/100`, sub: "dunnage efficiency" },
+        ].map((k) => (
+          <Card key={k.label} className="p-4">
+            <div className="text-[9px] uppercase tracking-widest mb-1" style={{ fontFamily: MONO, color: C.slate }}>{k.label}</div>
+            <div className="text-xl font-semibold" style={{ fontFamily: SERIF, color: C.navy }}>{k.value}</div>
+            <div className="text-[10px] mt-0.5" style={{ fontFamily: MONO, color: C.slate }}>{k.sub}</div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
+        {[
+          {
+            label: "Avg Dim-Wt Delta",
+            value: `${avgDimDelta >= 0 ? "−" : "+"}${Math.abs(avgDimDelta).toFixed(1)} lb`,
+            sub: `${overrides} AI overrides · ${confirmRate}% confirm`,
+          },
+          {
+            label: "Custom Recommendations",
+            value: String(customRecommendCount),
+            sub: `${customSizeStats.length} unique size${customSizeStats.length !== 1 ? "s" : ""}`,
+          },
+          {
+            label: "Archive Coverage",
+            value: n === 0 ? "—" : `${Math.min(100, Math.round((n / HISTORY_ARCHIVE_LIMIT) * 100))}%`,
+            sub: `${n.toLocaleString()} / ${HISTORY_ARCHIVE_LIMIT.toLocaleString()} records`,
+          },
+        ].map((k) => (
+          <Card key={k.label} className="p-4">
+            <div className="text-[9px] uppercase tracking-widest mb-1" style={{ fontFamily: MONO, color: C.slate }}>{k.label}</div>
+            <div className="text-xl font-semibold" style={{ fontFamily: SERIF, color: C.navy }}>{k.value}</div>
+            <div className="text-[10px] mt-0.5" style={{ fontFamily: MONO, color: C.slate }}>{k.sub}</div>
+          </Card>
+        ))}
+      </div>
+
+      <Card>
+        <div className="px-5 py-3 border-b flex flex-wrap items-center justify-between gap-2" style={{ borderColor: C.border, background: C.bgSoft }}>
+          <div>
             <span className="text-[10px] uppercase tracking-widest" style={{ fontFamily: MONO, color: C.slate }}>
-              Recent Analyses
+              All Custom Cartons
             </span>
+            <p className="text-[11px] mt-0.5" style={{ color: C.slate }}>
+              Every made-to-order size that cleared improvement thresholds — use for Packsize master-list planning.
+            </p>
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b" style={{ borderColor: C.border }}>
-                  {["When", "Order", "WMS", "AI", "Custom", "Savings", "Util", "Score", ""].map((h) => (
-                    <th key={h || "go"} className="text-left px-4 py-2 text-[10px] uppercase tracking-wider"
-                      style={{ fontFamily: MONO, color: C.slate }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {history.map((h) => (
-                  <tr
-                    key={h.id}
-                    onClick={() => setSelectedId(h.id)}
-                    className="border-b last:border-0 cursor-pointer transition-colors"
-                    style={{ borderColor: C.border }}
-                    onMouseEnter={(e) => { e.currentTarget.style.background = C.bgSoft; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-                  >
-                    <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.slate }}>
-                      {new Date(h.at).toLocaleString()}
-                    </td>
-                    <td className="px-4 py-2.5 text-xs" style={{ color: C.navy }}>
-                      {h.unitCount} units · {h.skuCount} SKUs
-                    </td>
-                    <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.violet }}>{h.wmsCarton}</td>
-                    <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.teal }}>{h.aiCarton}</td>
-                    <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: h.customRecommended ? C.cyan : C.slate }}>
-                      {h.customRecommended
-                        ? `${h.customRecommended.length}×${h.customRecommended.width}×${h.customRecommended.height}`
-                        : "—"}
-                    </td>
-                    <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: h.savings > 0 ? C.teal : C.slate }}>
-                      ${h.savings.toFixed(2)}
-                    </td>
-                    <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.navy }}>{h.utilization}%</td>
-                    <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.navy }}>{h.score}</td>
-                    <td className="px-4 py-2.5">
-                      <ChevronRight size={14} style={{ color: C.teal }} />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+          <span className="text-[10px]" style={{ fontFamily: MONO, color: C.teal }}>
+            {customRecommendCount} recommendation{customRecommendCount !== 1 ? "s" : ""} · {customSizeStats.length} unique
+          </span>
+        </div>
+        {customSizeStats.length === 0 ? (
+          <div className="px-5 py-8 text-center">
+            <p className="text-sm" style={{ color: C.slate }}>
+              No custom carton recommendations in the archive yet.
+            </p>
           </div>
-        </Card>
+        ) : (
+          <CustomSizesTable rows={customSizeStats} recommendCount={customRecommendCount} />
+        )}
+      </Card>
+
+      {n === 0 ? (
+        <div className="rounded-lg border border-dashed p-12 text-center" style={{ borderColor: C.border }}>
+          <BarChart3 size={28} className="mx-auto mb-2" style={{ color: C.bgMuted }} />
+          <p className="text-sm" style={{ color: C.slate }}>Run order analyses to build the total archive.</p>
+        </div>
+      ) : (
+        <AnalysesTable history={history} onSelect={setSelectedId} title={`All Analyses (${n.toLocaleString()})`} />
       )}
     </div>
   );
@@ -2092,7 +2310,7 @@ export default function App() {
     if (lastRecordedId.current === record.id) return;
     lastRecordedId.current = record.id;
     setHistory((prev) => {
-      const next = [record, ...prev].slice(0, 50);
+      const next = [record, ...prev].slice(0, HISTORY_ARCHIVE_LIMIT);
       saveHistory(next);
       return next;
     });
@@ -2108,6 +2326,7 @@ export default function App() {
     { id: "order" as Screen,     label: "New Order" },
     { id: "executive" as Screen, label: "Executive Dashboard" },
     { id: "analytics" as Screen, label: "Analytics" },
+    { id: "total-analytics" as Screen, label: "Total Analytics" },
     { id: "settings" as Screen,  label: "Admin" },
   ];
 
@@ -2164,6 +2383,7 @@ export default function App() {
                 : screen === "recommendation" ? "Recommendation"
                 : screen === "executive" ? "Executive Dashboard"
                 : screen === "analytics" ? "Analytics"
+                : screen === "total-analytics" ? "Total Analytics"
                 : "Admin / Settings"}
             </span>
           </div>
@@ -2172,7 +2392,7 @@ export default function App() {
 
       {/* Main */}
       <main className="flex-1 overflow-y-auto">
-        <div className={`${screen === "executive" ? "max-w-6xl" : "max-w-5xl"} mx-auto px-6 py-8`}>
+        <div className={`${screen === "executive" || screen === "total-analytics" ? "max-w-6xl" : "max-w-5xl"} mx-auto px-6 py-8`}>
           {screen === "home"           && <HomeScreen onNewOrder={goOrder} />}
           {screen === "order"          && <OrderScreen skuDb={skuDb} cartons={cartons} onAnalyze={handleAnalyze} />}
           {screen === "recommendation" && order && (
@@ -2182,6 +2402,7 @@ export default function App() {
             <ExecutiveDashboard history={history} catalogCartonCount={cartons.length} />
           )}
           {screen === "analytics"      && <AnalyticsScreen history={history} onClear={clearHistory} />}
+          {screen === "total-analytics" && <TotalAnalyticsScreen history={history} onClear={clearHistory} />}
           {screen === "settings"       && (
             <SettingsScreen skuDb={skuDb} setSkuDb={setSkuDb} />
           )}
