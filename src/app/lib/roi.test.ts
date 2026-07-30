@@ -137,25 +137,20 @@ describe("missing-data behavior", () => {
 });
 
 describe("filters, sort, sample", () => {
-  it("filters by SKU and date", () => {
+  it("filters by category and date", () => {
     const history = buildSampleHistory();
     const filters: DashboardFilters = {
       dateFrom: null,
       dateTo: null,
       timeRange: "year",
-      businessUnit: "",
-      productFamily: "",
-      site: "",
-      region: "",
+      category: "Urology",
       carrier: "",
-      sku: "URO-210",
-      packsizeCarton: "",
       recommendationStatus: "",
       validationStatus: "",
     };
     const out = filterHistory(history, filters);
     expect(out.length).toBeGreaterThan(0);
-    expect(out.every((r) => r.breakdown?.items?.some((i) => i.skuId === "URO-210"))).toBe(true);
+    expect(out.every((r) => r.category === "Urology")).toBe(true);
   });
 
   it("sorts opportunities by savings descending", () => {

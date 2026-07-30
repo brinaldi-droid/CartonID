@@ -14,6 +14,7 @@ import {
 } from "recharts";
 import {
   AlertTriangle,
+  Box,
   Copy,
   Download,
   FileSpreadsheet,
@@ -24,6 +25,7 @@ import {
   TrendingDown,
   TrendingUp,
   Truck,
+  Zap,
 } from "lucide-react";
 import {
   buildExecutiveDashboard,
@@ -120,6 +122,172 @@ function TrendIcon({ trend }: { trend: MetricValue["trend"] }) {
   return null;
 }
 
+function ImpactHero({
+  annualValue,
+  roi,
+  utilBefore,
+  utilAfter,
+  cuFtEliminated,
+  packagingCostBefore,
+  packagingCostAfter,
+  usingSample,
+}: {
+  annualValue: MetricValue;
+  roi: MetricValue;
+  utilBefore: number | null;
+  utilAfter: number | null;
+  cuFtEliminated: MetricValue;
+  packagingCostBefore: number | null;
+  packagingCostAfter: number | null;
+  usingSample: boolean;
+}) {
+  const utilLift =
+    utilBefore != null && utilAfter != null ? Math.round((utilAfter - utilBefore) * 10) / 10 : null;
+  const packCostPct =
+    packagingCostBefore != null &&
+    packagingCostAfter != null &&
+    packagingCostBefore > 0
+      ? Math.round(((packagingCostBefore - packagingCostAfter) / packagingCostBefore) * 100)
+      : null;
+
+  const impacts: Array<{
+    icon: React.ReactNode;
+    label: string;
+    value: string;
+    sub: string;
+  }> = [
+    {
+      icon: <Zap size={16} />,
+      label: "ROI",
+      value: formatMetricNumber(roi),
+      sub: "vs program cost",
+    },
+    {
+      icon: <Box size={16} />,
+      label: "Cube utilization",
+      value: utilLift == null ? "Data unavailable" : `${utilLift > 0 ? "+" : ""}${utilLift} pts`,
+      sub:
+        utilBefore != null && utilAfter != null
+          ? `${Math.round(utilBefore)}% → ${Math.round(utilAfter)}%`
+          : "Before → after",
+    },
+    {
+      icon: <Truck size={16} />,
+      label: "Trailer space freed",
+      value: formatMetricNumber(cuFtEliminated),
+      sub: "Allocated space avoided",
+    },
+    {
+      icon: <Leaf size={16} />,
+      label: "Pack cost / shipment",
+      value: packCostPct == null ? "Data unavailable" : `−${packCostPct}%`,
+      sub:
+        packagingCostBefore != null && packagingCostAfter != null
+          ? `$${packagingCostBefore.toFixed(2)} → $${packagingCostAfter.toFixed(2)}`
+          : "Material unit cost",
+    },
+  ];
+
+  return (
+    <div
+      className="rounded-xl overflow-hidden relative"
+      style={{
+        background: `linear-gradient(135deg, ${C.navy} 0%, #002a52 48%, #004d6b 100%)`,
+        boxShadow: "0 8px 28px rgba(0,60,113,0.22)",
+      }}
+    >
+      <div
+        className="pointer-events-none absolute inset-0 opacity-40"
+        style={{
+          backgroundImage:
+            "radial-gradient(ellipse 80% 60% at 100% 0%, rgba(0,238,255,0.22), transparent 55%), radial-gradient(ellipse 50% 40% at 0% 100%, rgba(0,190,204,0.18), transparent 50%)",
+        }}
+      />
+      <div className="relative px-6 pt-6 pb-5 sm:px-8 sm:pt-7 sm:pb-6">
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <span
+            className="text-[9px] uppercase tracking-[0.18em] font-semibold"
+            style={{ fontFamily: MONO, color: "rgba(255,255,255,0.55)" }}
+          >
+            Highest-impact outcomes
+          </span>
+          <IntegrityBadge integrity={usingSample ? "Sample" : annualValue.integrity} />
+        </div>
+
+        <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 mb-6">
+          <div className="max-w-xl">
+            <div
+              className="text-[10px] uppercase tracking-widest mb-2"
+              style={{ fontFamily: MONO, color: C.cyan }}
+            >
+              Annual value created
+            </div>
+            <div
+              className="font-semibold leading-none tracking-tight"
+              style={{ fontFamily: SERIF, color: C.white, fontSize: "clamp(2.4rem, 5vw, 3.5rem)" }}
+            >
+              {formatMetricNumber(annualValue)}
+            </div>
+            <p className="text-sm mt-3 leading-snug max-w-md" style={{ color: "rgba(255,255,255,0.65)" }}>
+              Combined transportation space, packaging material, labor, and damage-cost impact at configured annual
+              volume.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            <div
+              className="rounded-full flex items-center justify-center"
+              style={{
+                width: 56,
+                height: 56,
+                background: "rgba(0,238,255,0.12)",
+                border: "1px solid rgba(0,238,255,0.35)",
+                color: C.cyan,
+              }}
+            >
+              <TrendingUp size={26} />
+            </div>
+            <div>
+              <div className="text-[9px] uppercase tracking-widest" style={{ fontFamily: MONO, color: "rgba(255,255,255,0.45)" }}>
+                Direction
+              </div>
+              <div className="text-sm font-semibold" style={{ color: C.white }}>
+                Cost & waste down · Protection held
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div
+          className="grid grid-cols-2 lg:grid-cols-4 gap-px rounded-lg overflow-hidden"
+          style={{ background: "rgba(255,255,255,0.08)" }}
+        >
+          {impacts.map((item) => (
+            <div
+              key={item.label}
+              className="px-4 py-3.5"
+              style={{ background: "rgba(0,20,40,0.35)" }}
+            >
+              <div className="flex items-center gap-1.5 mb-2" style={{ color: C.cyan }}>
+                {item.icon}
+                <span className="text-[9px] uppercase tracking-widest" style={{ fontFamily: MONO, color: "rgba(255,255,255,0.5)" }}>
+                  {item.label}
+                </span>
+              </div>
+              <div className="text-xl font-semibold" style={{ fontFamily: SERIF, color: C.white }}>
+                {item.value}
+              </div>
+              <div className="text-[10px] mt-0.5" style={{ fontFamily: MONO, color: "rgba(255,255,255,0.45)" }}>
+                {item.sub}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function KpiCard({ m }: { m: MetricValue }) {
   const delta =
     m.changeVsBaseline == null || !Number.isFinite(m.changeVsBaseline)
@@ -166,13 +334,8 @@ function downloadText(filename: string, content: string, mime = "text/csv;charse
 
 const emptyFilters = (): Partial<DashboardFilters> => ({
   timeRange: "year",
-  businessUnit: "",
-  productFamily: "",
-  site: "",
-  region: "",
+  category: "",
   carrier: "",
-  sku: "",
-  packsizeCarton: "",
   recommendationStatus: "",
   validationStatus: "",
   dateFrom: null,
@@ -311,6 +474,21 @@ export function ExecutiveDashboard({
         </div>
       </div>
 
+      <ImpactHero
+        annualValue={model.kpis.totalAnnualSavings}
+        roi={model.kpis.roiPercent}
+        utilBefore={model.beforeAfter.find((r) => r.metric === "Average cube utilization")?.without.value ?? null}
+        utilAfter={model.beforeAfter.find((r) => r.metric === "Average cube utilization")?.with.value ?? null}
+        cuFtEliminated={model.transportation.cuFtEliminated}
+        packagingCostBefore={
+          model.beforeAfter.find((r) => r.metric === "Average packaging cost per shipment")?.without.value ?? null
+        }
+        packagingCostAfter={
+          model.beforeAfter.find((r) => r.metric === "Average packaging cost per shipment")?.with.value ?? null
+        }
+        usingSample={model.usingSampleData}
+      />
+
       {model.usingSampleData && (
         <div
           className="rounded-lg border px-4 py-3 flex items-start gap-3"
@@ -395,13 +573,8 @@ export function ExecutiveDashboard({
           )}
           {(
             [
-              ["businessUnit", "Business unit", model.availableFilterOptions.businessUnits],
-              ["productFamily", "Product family", model.availableFilterOptions.productFamilies],
-              ["site", "Site", model.availableFilterOptions.sites],
-              ["region", "Region", model.availableFilterOptions.regions],
+              ["category", "Category", model.availableFilterOptions.categories],
               ["carrier", "Carrier", model.availableFilterOptions.carriers],
-              ["sku", "SKU", model.availableFilterOptions.skus],
-              ["packsizeCarton", "Packsize carton", model.availableFilterOptions.cartons],
               ["recommendationStatus", "Recommendation status", model.availableFilterOptions.recommendationStatuses],
               ["validationStatus", "Validation status", model.availableFilterOptions.validationStatuses],
             ] as const

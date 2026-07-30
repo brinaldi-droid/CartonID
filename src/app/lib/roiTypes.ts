@@ -195,13 +195,8 @@ export interface DashboardFilters {
   dateFrom: string | null;
   dateTo: string | null;
   timeRange: TimeRangePreset;
-  businessUnit: string;
-  productFamily: string;
-  site: string;
-  region: string;
+  category: string;
   carrier: string;
-  sku: string;
-  packsizeCarton: string;
   recommendationStatus: string;
   validationStatus: string;
 }
@@ -233,13 +228,8 @@ export interface ExecutiveDashboardModel {
   roi: RoiMetrics;
   valueScore: PackagingValueScore;
   availableFilterOptions: {
-    businessUnits: string[];
-    productFamilies: string[];
-    sites: string[];
-    regions: string[];
+    categories: string[];
     carriers: string[];
-    skus: string[];
-    cartons: string[];
     recommendationStatuses: string[];
     validationStatuses: string[];
   };
@@ -268,10 +258,7 @@ export interface RoiHistoryRecord {
   wmsVolume?: number;
   aiVolume?: number;
   wmsVoidPct?: number;
-  businessUnit?: string;
-  productFamily?: string;
-  site?: string;
-  region?: string;
+  category?: string;
   carrier?: string;
   validationStatus?: string;
   recommendationStatus?: string;

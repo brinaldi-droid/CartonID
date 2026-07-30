@@ -65,6 +65,7 @@ interface AnalysisItemSnapshot {
   weight: number;
   fragility: FragilityLevel;
   rigidityClass?: string;
+  category?: string;
   qty: number;
 }
 
@@ -100,6 +101,8 @@ interface AnalysisRecord {
   wmsVolume?: number;
   aiVolume?: number;
   wmsVoidPct?: number;
+  /** Primary SKU category for executive filters */
+  category?: string;
   /** Full breakdown snapshot — older history entries may omit this */
   breakdown?: {
     items: AnalysisItemSnapshot[];
@@ -646,6 +649,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
       wmsVolume: wmsVol,
       aiVolume: aiVol,
       wmsVoidPct: wmsCubing.fits ? wmsCubing.voidPct : undefined,
+      category: items[0]?.sku.category,
       breakdown: {
         items: items.map(({ sku, qty }) => ({
           skuId: sku.id,
@@ -656,6 +660,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
           weight: sku.weight,
           fragility: sku.fragility,
           rigidityClass: sku.rigidityClass ?? sku.mechanical?.rigidityClass,
+          category: sku.category,
           qty,
         })),
         wms: snapCarton(manhattan),

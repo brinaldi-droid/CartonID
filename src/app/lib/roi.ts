@@ -218,21 +218,11 @@ export function filterHistory(
       const to = Date.parse(filters.dateTo);
       if (Number.isFinite(to) && Number.isFinite(t) && t > to) return false;
     }
-    if (filters.sku) {
-      const ids = r.breakdown?.items?.map((i) => i.skuId) ?? [];
-      if (!ids.includes(filters.sku) && !ids.some((id) => id.includes(filters.sku))) return false;
+    if (filters.category) {
+      const recordCat = r.category ?? r.breakdown?.items?.find((i) => i.category)?.category ?? "";
+      const itemCats = r.breakdown?.items?.map((i) => i.category).filter(Boolean) ?? [];
+      if (recordCat !== filters.category && !itemCats.includes(filters.category)) return false;
     }
-    if (filters.packsizeCarton) {
-      const hit =
-        r.aiCarton === filters.packsizeCarton ||
-        r.breakdown?.ai?.id === filters.packsizeCarton ||
-        r.breakdown?.ai?.name === filters.packsizeCarton;
-      if (!hit) return false;
-    }
-    if (filters.businessUnit && (r.businessUnit ?? "") !== filters.businessUnit) return false;
-    if (filters.productFamily && (r.productFamily ?? "") !== filters.productFamily) return false;
-    if (filters.site && (r.site ?? "") !== filters.site) return false;
-    if (filters.region && (r.region ?? "") !== filters.region) return false;
     if (filters.carrier && (r.carrier ?? "") !== filters.carrier) return false;
     if (filters.recommendationStatus) {
       const st = r.recommendationStatus ?? r.breakdown?.fitStatus ?? (r.confirmedWms ? "confirmed" : "override");
@@ -299,6 +289,7 @@ export function buildSampleHistory(now = new Date()): RoiHistoryRecord[] {
   const skus = ["URO-210", "CV-440", "ORTH-112", "ENT-055", "GEN-901"];
   const wms = ["WMS-24x18x16", "WMS-22x16x14", "WMS-28x20x18"];
   const ai = ["PS-18x12x10", "PS-16x12x8", "PS-20x14x10", "PS-14x10x8"];
+  const categories = ["Urology", "Cardiology", "Orthopedics", "ENT", "General"];
   for (let i = 0; i < 24; i++) {
     const d = new Date(now);
     d.setDate(d.getDate() - i * 3);
@@ -312,6 +303,7 @@ export function buildSampleHistory(now = new Date()): RoiHistoryRecord[] {
     const aiVol = aL * aW * aH;
     const wmsCost = 18 + (i % 7);
     const aiCost = 11 + (i % 5);
+    const category = categories[i % categories.length]!;
     rows.push({
       id: `sample-${i}`,
       at: d.toISOString(),
@@ -332,15 +324,12 @@ export function buildSampleHistory(now = new Date()): RoiHistoryRecord[] {
       wmsVolume: wmsVol,
       aiVolume: aiVol,
       wmsVoidPct: 35 + (i % 15),
-      businessUnit: i % 2 === 0 ? "Medical Devices" : "Surgical Consumables",
-      productFamily: skus[i % skus.length]!.split("-")[0]!,
-      site: i % 3 === 0 ? "DC-East" : i % 3 === 1 ? "DC-Central" : "DC-West",
-      region: i % 2 === 0 ? "Northeast" : "Midwest",
+      category,
       carrier: i % 2 === 0 ? "Parcel" : "LTL",
       validationStatus: i % 4 === 0 ? "validated" : "pending",
       recommendationStatus: i % 5 === 0 ? "confirmed" : "override",
       breakdown: {
-        items: [{ skuId: skus[i % skus.length]!, name: `Sample SKU ${skus[i % skus.length]}`, qty: 1 }],
+        items: [{ skuId: skus[i % skus.length]!, name: `Sample SKU ${skus[i % skus.length]}`, qty: 1, category }],
         wms: { length: wL, width: wW, height: wH, cost: wmsCost, name: wms[i % wms.length], id: wms[i % wms.length] },
         ai: { length: aL, width: aW, height: aH, cost: aiCost, name: ai[i % ai.length], id: ai[i % ai.length] },
         aiScore: { damageRisk: 25 + (i % 20), voidPct: 22 - (i % 10), dunnageVolEst: aiVol * 0.12 },
@@ -377,13 +366,8 @@ export function buildExecutiveDashboard(options: {
     dateFrom: null,
     dateTo: null,
     timeRange: "year",
-    businessUnit: "",
-    productFamily: "",
-    site: "",
-    region: "",
+    category: "",
     carrier: "",
-    sku: "",
-    packsizeCarton: "",
     recommendationStatus: "",
     validationStatus: "",
     ...options.filters,
@@ -401,9 +385,9 @@ export function buildExecutiveDashboard(options: {
     if (!filtered.some((r) => resolveVolumes(r).wms != null)) {
       missingFields.push("wmsVolume / carton dimensions on history (corrugate & space cost partial)");
     }
-    if (!filtered.some((r) => r.businessUnit)) missingFields.push("businessUnit");
-    if (!filtered.some((r) => r.site)) missingFields.push("site");
-    if (!filtered.some((r) => r.region)) missingFields.push("region");
+    if (!filtered.some((r) => r.category || r.breakdown?.items?.some((i) => i.category))) {
+      missingFields.push("category");
+    }
     if (!filtered.some((r) => r.carrier)) missingFields.push("carrier");
     if (!filtered.some((r) => r.validationStatus)) missingFields.push("validationStatus (physical validation)");
     missingFields.push("actual freight invoices (using allocated trailer-space cost)");
@@ -1338,13 +1322,11 @@ export function buildExecutiveDashboard(options: {
     },
     valueScore,
     availableFilterOptions: {
-      businessUnits: uniq(raw.map((r) => r.businessUnit)),
-      productFamilies: uniq(raw.map((r) => r.productFamily)),
-      sites: uniq(raw.map((r) => r.site)),
-      regions: uniq(raw.map((r) => r.region)),
+      categories: uniq([
+        ...raw.map((r) => r.category),
+        ...raw.flatMap((r) => r.breakdown?.items?.map((i) => i.category) ?? []),
+      ]),
       carriers: uniq(raw.map((r) => r.carrier)),
-      skus: uniq(raw.flatMap((r) => r.breakdown?.items?.map((i) => i.skuId) ?? [])),
-      cartons: uniq(raw.map((r) => r.aiCarton)),
       recommendationStatuses: uniq(
         raw.map((r) => r.recommendationStatus ?? (r.confirmedWms ? "confirmed" : "override")),
       ),
