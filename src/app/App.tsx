@@ -567,7 +567,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
       (wmsCartonId ? cartons.find((c) => c.id === wmsCartonId) : null) ??
       calcManhattan(items, cartons);
     const wmsIsManual = wmsCartonId != null && cartons.some((c) => c.id === wmsCartonId);
-    const { carton: ai, score, noFit, candidateCount, minRequired, cubing, custom } = calcAI(items, cartons);
+    const { carton: ai, score, noFit, candidateCount, minRequired, cubing, custom, customDecision } = calcAI(items, cartons);
     const aiCubing = noFit ? null : cubing ?? cubePack(items, ai);
     const wmsCubing = cubePack(items, manhattan);
     const manhattanScore = scoreCarton(manhattan, items, wmsCubing);
@@ -583,6 +583,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
       wmsCubing,
       manhattanScore,
       custom,
+      customDecision,
     };
   }, [items, cartons, wmsCartonId]);
 
@@ -598,6 +599,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
     wmsCubing,
     manhattanScore,
     custom,
+    customDecision,
   } = analysis;
 
   const savings         = manhattan.cost - ai.cost;
@@ -764,7 +766,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
       )}
 
       {/* ── Side-by-side comparison ───────────────────────────────────────────── */}
-      <div className={`grid grid-cols-1 gap-4 ${custom ? "md:grid-cols-2 xl:grid-cols-3" : "md:grid-cols-2"}`}>
+      <div className={`grid grid-cols-1 gap-4 ${custom || customDecision.status === "evaluated-not-beneficial" ? "md:grid-cols-2 xl:grid-cols-3" : "md:grid-cols-2"}`}>
 
         {/* WMS column — always shows raw cubing metrics, score if available */}
         <Card style={{ borderColor: C.violet + "40" }}>
@@ -959,7 +961,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
               <div className="rounded p-3 mb-3" style={{ background: "#f59e0b08", border: "1px solid #f59e0b30" }}>
                 <div className="text-[9px] uppercase tracking-wider font-semibold mb-1.5" style={{ fontFamily: MONO, color: "#b45309" }}>
                   {custom
-                    ? "Advisory — Best Packsize Score; Custom Size Proposed"
+                    ? "Advisory — Packsize Primary; Custom Exceeds Thresholds"
                     : "Advisory — Best Packsize Score; Review Preferred Targets"}
                 </div>
                 {score.fitReasons.map((r, i) => (
@@ -990,7 +992,7 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
           </div>
         </Card>
 
-        {/* Custom sized carton — when Packsize AI is outside preferred targets */}
+        {/* Custom carton — only when it beats Packsize by configured thresholds */}
         {custom && (
           <Card style={{ borderColor: C.cyan + "70", boxShadow: `0 0 0 1px ${C.cyan}25, 0 4px 20px ${C.cyan}12` }}>
             <div className="h-1 rounded-t-lg" style={{ background: `linear-gradient(90deg, ${C.cyan}, ${C.teal})` }} />
@@ -999,51 +1001,58 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
                 <div>
                   <div className="flex items-center gap-1.5 mb-1 flex-wrap">
                     <span className="text-[9px] uppercase tracking-widest" style={{ fontFamily: MONO, color: C.cyan }}>
-                      Custom Size Recommendation
+                      Custom Carton Recommendation
                     </span>
                     <span className="text-[8px] px-1.5 py-0.5 rounded-full font-semibold" style={{ fontFamily: MONO, background: C.cyan + "18", color: C.navy }}>
-                      Made-to-order
+                      Exceeds Packsize
                     </span>
-                    {custom.score.fitStatus === "recommended" && (
-                      <span className="text-[8px] px-1.5 py-0.5 rounded-full font-semibold" style={{ fontFamily: MONO, background: C.teal + "15", color: C.teal }}>
-                        Within preferred targets
-                      </span>
-                    )}
-                    {custom.score.fitStatus === "not-recommended" && (
-                      <span className="text-[8px] px-1.5 py-0.5 rounded-full font-semibold" style={{ fontFamily: MONO, background: "#f59e0b18", color: "#b45309" }}>
-                        Review targets
-                      </span>
-                    )}
-                    {custom.score.total > score.total && (
-                      <span className="text-[8px] px-1.5 py-0.5 rounded" style={{ fontFamily: MONO, background: C.teal + "15", color: C.teal }}>
-                        +{custom.score.total - score.total} vs Packsize
-                      </span>
-                    )}
+                    <span className="text-[8px] px-1.5 py-0.5 rounded" style={{ fontFamily: MONO, background: C.teal + "15", color: C.teal }}>
+                      +{Math.round(custom.comparison.scoreDelta)} eng. pts
+                    </span>
                   </div>
                   <div style={{ fontFamily: SERIF, fontSize: 18, color: C.navy, fontWeight: 600 }}>
-                    {custom.carton.name}
+                    {custom.carton.length} × {custom.carton.width} × {custom.carton.height} in
                   </div>
                   <div className="text-[10px] mt-0.5" style={{ fontFamily: MONO, color: C.slate }}>
-                    {custom.carton.length} × {custom.carton.width} × {custom.carton.height} in ·{" "}
-                    {vol(custom.carton.length, custom.carton.width, custom.carton.height).toLocaleString()} in³
+                    {vol(custom.carton.length, custom.carton.width, custom.carton.height).toLocaleString()} in³ · made-to-order
                   </div>
-                  {custom.carton.cost > 0 && (
-                    <div className="text-sm font-semibold mt-1" style={{ fontFamily: MONO, color: C.navy }}>
-                      Est. carton cost ${custom.carton.cost.toFixed(2)}
-                      <span className="ml-2 font-normal" style={{ color: C.slate }}>
-                        (catalog rate estimate)
-                      </span>
-                    </div>
-                  )}
                 </div>
                 <ScoreRing score={custom.score.total} size={52} />
               </div>
 
-              <p className="text-[10px] mb-3 leading-relaxed" style={{ fontFamily: MONO, color: C.slate }}>
+              <p className="text-[11px] mb-3 leading-relaxed" style={{ color: C.navy }}>
                 {custom.reason}
               </p>
 
-              <div className="space-y-2 mb-4">
+              <div className="grid grid-cols-2 gap-2 mb-4">
+                {[
+                  { label: "Engineering Score", value: `${custom.score.total} (+${Math.round(custom.comparison.scoreDelta)} vs Packsize)` },
+                  { label: "Est. Packaging Cost", value: `$${custom.carton.cost.toFixed(2)}` },
+                  {
+                    label: "Est. Transportation Cost",
+                    value: `$${custom.comparison.transportCostCustom.toFixed(2)}`,
+                  },
+                  {
+                    label: "Est. Savings / Shipment",
+                    value: `$${(custom.comparison.packagingCostSavings + custom.comparison.transportCostSavings).toFixed(2)}`,
+                  },
+                  {
+                    label: "ROI vs Packsize",
+                    value:
+                      score.total > 0
+                        ? `+${Math.round((custom.comparison.scoreDelta / score.total) * 100)}% eng. · $${(custom.comparison.packagingCostSavings + custom.comparison.transportCostSavings).toFixed(2)}`
+                        : `+${Math.round(custom.comparison.scoreDelta)} pts`,
+                  },
+                  { label: "Cube Utilization", value: `${custom.score.utilization}% (Packsize ${score.utilization}%)` },
+                ].map((m) => (
+                  <div key={m.label} className="rounded p-2" style={{ background: C.bgSoft }}>
+                    <div className="text-[9px] uppercase tracking-wider mb-0.5" style={{ fontFamily: MONO, color: C.slate }}>{m.label}</div>
+                    <div className="text-xs font-semibold" style={{ fontFamily: MONO, color: C.navy }}>{m.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="space-y-2">
                 {[
                   { label: "Damage Prevention", value: custom.score.damagePrevention, packVal: score.damagePrevention, color: C.cyan },
                   { label: "Movement Prevention", value: custom.score.movementPrevention, packVal: score.movementPrevention, color: C.cyan },
@@ -1065,24 +1074,24 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
                   </div>
                 ))}
               </div>
+            </div>
+          </Card>
+        )}
 
-              <div className="grid grid-cols-2 gap-2 pt-3 border-t" style={{ borderColor: C.border }}>
-                {[
-                  { label: "Cube Utilization", value: `${custom.score.utilization}%` },
-                  { label: "vs Packsize", value: `${score.utilization}% → ${custom.score.utilization}%` },
-                  { label: "Total Void", value: `${custom.score.voidPct}%` },
-                  { label: "Weight Balance", value: custom.cubing.weightBalance },
-                  ...(custom.carton.cost > 0 ? [{ label: "Est. Cost", value: `$${custom.carton.cost.toFixed(2)}` }] : []),
-                  { label: "Dim. Weight", value: `${dimW(custom.carton.length, custom.carton.width, custom.carton.height).toFixed(1)} lb` },
-                  { label: "Eng. Score", value: `${custom.score.total} vs ${score.total}` },
-                  { label: "Layers", value: `${custom.cubing.layers}` },
-                ].map((m) => (
-                  <div key={m.label} className="rounded p-2" style={{ background: C.bgSoft }}>
-                    <div className="text-[9px] uppercase tracking-wider mb-0.5" style={{ fontFamily: MONO, color: C.slate }}>{m.label}</div>
-                    <div className="text-xs font-semibold" style={{ fontFamily: MONO, color: C.navy }}>{m.value}</div>
-                  </div>
-                ))}
+        {!noFit && !custom && customDecision.status === "evaluated-not-beneficial" && (
+          <Card style={{ borderColor: C.teal + "40" }}>
+            <div className="h-1 rounded-t-lg" style={{ background: C.teal }} />
+            <div className="p-5">
+              <div className="flex items-center gap-2 mb-2">
+                <CheckCircle2 size={16} style={{ color: C.teal }} />
+                <span className="text-[11px] uppercase tracking-widest font-semibold" style={{ fontFamily: MONO, color: C.teal }}>
+                  Best Available Packsize Carton
+                </span>
               </div>
+              <p className="text-sm leading-relaxed" style={{ color: C.navy }}>
+                A custom carton was evaluated but did not provide sufficient engineering or financial benefit over the
+                recommended Packsize carton.
+              </p>
             </div>
           </Card>
         )}

@@ -138,18 +138,257 @@ export function calcManhattan(items: OrderItem[], cartons: Carton[]): Carton {
   );
 }
 
+export interface CustomCartonThresholds {
+  /** Minimum engineering score points above Packsize (absolute) */
+  minScoreImprovement: number;
+  /** Minimum total packaging cost reduction (%) */
+  minPackagingCostReductionPct: number;
+  /** Minimum allocated transportation-space cost reduction (%) */
+  minTransportCostReductionPct: number;
+  /** Minimum cube utilization improvement (percentage points) */
+  minUtilImprovementPoints: number;
+  /** Minimum paper dunnage / void reduction (%) */
+  minDunnageReductionPct: number;
+  /** Minimum damage-risk score reduction (%) */
+  minDamageRiskReductionPct: number;
+  /** $/in³ used to estimate allocated trailer-space cost (not invoice freight) */
+  transportCostPerCuIn: number;
+}
+
+export const DEFAULT_CUSTOM_THRESHOLDS: CustomCartonThresholds = {
+  minScoreImprovement: 5,
+  minPackagingCostReductionPct: 5,
+  minTransportCostReductionPct: 5,
+  minUtilImprovementPoints: 5,
+  minDunnageReductionPct: 10,
+  minDamageRiskReductionPct: 10,
+  transportCostPerCuIn: 0.00085,
+};
+
+export interface CustomVsPacksizeComparison {
+  scoreDelta: number;
+  packagingCostSavings: number;
+  packagingCostReductionPct: number | null;
+  transportCostPacksize: number;
+  transportCostCustom: number;
+  transportCostSavings: number;
+  transportCostReductionPct: number | null;
+  utilImprovementPoints: number;
+  dunnageReductionPct: number | null;
+  damageRiskReductionPct: number | null;
+  movementRiskReduction: number;
+  cgImproved: boolean;
+  weightBalanceImproved: boolean;
+  corrugatedAreaReductionPct: number | null;
+  meaningfulImprovements: string[];
+  thresholdHits: string[];
+  /** custom.total > packsize.total */
+  beatsPacksizeScore: boolean;
+  /** Passes score gate + at least one threshold */
+  qualifies: boolean;
+  summary: string;
+}
+
 export interface CustomCartonRecommendation {
   carton: Carton;
   score: EngineeringScore;
   cubing: CubingResult;
-  /** Why a custom size was proposed */
+  /** Why a custom size was proposed / why it wins */
   reason: string;
+  comparison: CustomVsPacksizeComparison;
 }
+
+export type CustomCartonDecision =
+  | { status: "recommended"; recommendation: CustomCartonRecommendation }
+  | { status: "evaluated-not-beneficial"; candidate: CustomCartonRecommendation | null }
+  | { status: "not-evaluated" };
 
 /** True when cube utilization is outside the 80–92% preferred band. */
 export function isOutsidePreferredUtil(score: Pick<EngineeringScore, "utilization">): boolean {
   const u = score.utilization / 100;
   return u < UTIL_MIN - 1e-9 || u > UTIL_MAX + 1e-9;
+}
+
+function cartonSurfaceIn2(c: Pick<Carton, "length" | "width" | "height">): number {
+  const { length: l, width: w, height: h } = c;
+  return 2 * (l * w + l * h + w * h);
+}
+
+function pctReduction(before: number, after: number): number | null {
+  if (!Number.isFinite(before) || before <= 0) return null;
+  return ((before - after) / before) * 100;
+}
+
+/**
+ * Compare a custom carton against the best Packsize pick.
+ * Custom is recommended only when its engineering score is strictly higher
+ * AND at least one configurable improvement threshold is met.
+ */
+export function evaluateCustomVsPacksize(
+  packsize: { carton: Carton; score: EngineeringScore; cubing: CubingResult },
+  custom: { carton: Carton; score: EngineeringScore; cubing: CubingResult },
+  thresholds: CustomCartonThresholds = DEFAULT_CUSTOM_THRESHOLDS,
+): CustomVsPacksizeComparison {
+  const ps = packsize.score;
+  const cs = custom.score;
+  const scoreDelta = cs.total - ps.total;
+  const beatsPacksizeScore = scoreDelta > 0;
+
+  const packagingCostSavings = Math.max(0, packsize.carton.cost - custom.carton.cost);
+  const packagingCostReductionPct = pctReduction(packsize.carton.cost, custom.carton.cost);
+
+  const volPs = vol(packsize.carton.length, packsize.carton.width, packsize.carton.height);
+  const volCu = vol(custom.carton.length, custom.carton.width, custom.carton.height);
+  const transportCostPacksize = volPs * thresholds.transportCostPerCuIn;
+  const transportCostCustom = volCu * thresholds.transportCostPerCuIn;
+  const transportCostSavings = Math.max(0, transportCostPacksize - transportCostCustom);
+  const transportCostReductionPct = pctReduction(transportCostPacksize, transportCostCustom);
+
+  const utilImprovementPoints = cs.utilization - ps.utilization;
+  const dunnageReductionPct = pctReduction(ps.voidPct, cs.voidPct);
+  const damageRiskReductionPct = pctReduction(ps.damageRisk, cs.damageRisk);
+  const movementRiskReduction = ps.movementRisk - cs.movementRisk;
+
+  const cgZPs = packsize.cubing.cgRel.z;
+  const cgZCu = custom.cubing.cgRel.z;
+  // Prefer CG closer to ~0.35 (same target used in scoring)
+  const cgImproved = Math.abs(cgZCu - 0.35) + 1e-9 < Math.abs(cgZPs - 0.35);
+  const weightBalanceImproved =
+    custom.cubing.weightBalance === "Well-balanced" &&
+    packsize.cubing.weightBalance !== "Well-balanced";
+
+  const surfPs = cartonSurfaceIn2(packsize.carton);
+  const surfCu = cartonSurfaceIn2(custom.carton);
+  const corrugatedAreaReductionPct = pctReduction(surfPs, surfCu);
+
+  const meaningfulImprovements: string[] = [];
+  if (packagingCostSavings > 0.01) meaningfulImprovements.push("lower packaging cost");
+  if (transportCostSavings > 1e-9) meaningfulImprovements.push("lower transportation-space cost");
+  if ((corrugatedAreaReductionPct ?? 0) > 0.5) meaningfulImprovements.push("lower corrugated cost");
+  if ((dunnageReductionPct ?? 0) > 0.5) meaningfulImprovements.push("lower paper dunnage usage");
+  if (movementRiskReduction > 0.5) meaningfulImprovements.push("lower movement risk");
+  if ((damageRiskReductionPct ?? 0) > 0.5) meaningfulImprovements.push("lower damage risk");
+  if (weightBalanceImproved) meaningfulImprovements.push("better weight distribution");
+  if (cgImproved) meaningfulImprovements.push("better center of gravity");
+  if (custom.cubing.layers < packsize.cubing.layers) meaningfulImprovements.push("better load path");
+  if (utilImprovementPoints > 0.5) meaningfulImprovements.push("better cube utilization");
+
+  const thresholdHits: string[] = [];
+  if (scoreDelta >= thresholds.minScoreImprovement) {
+    thresholdHits.push(`engineering score +${Math.round(scoreDelta)} pts`);
+  }
+  if (
+    packagingCostReductionPct != null &&
+    packagingCostReductionPct >= thresholds.minPackagingCostReductionPct
+  ) {
+    thresholdHits.push(`packaging cost −${Math.round(packagingCostReductionPct)}%`);
+  }
+  if (
+    transportCostReductionPct != null &&
+    transportCostReductionPct >= thresholds.minTransportCostReductionPct
+  ) {
+    thresholdHits.push(`transportation cost −${Math.round(transportCostReductionPct)}%`);
+  }
+  if (utilImprovementPoints >= thresholds.minUtilImprovementPoints) {
+    thresholdHits.push(`cube utilization +${Math.round(utilImprovementPoints)} pts`);
+  }
+  if (dunnageReductionPct != null && dunnageReductionPct >= thresholds.minDunnageReductionPct) {
+    thresholdHits.push(`paper dunnage −${Math.round(dunnageReductionPct)}%`);
+  }
+  if (
+    damageRiskReductionPct != null &&
+    damageRiskReductionPct >= thresholds.minDamageRiskReductionPct
+  ) {
+    thresholdHits.push(`damage risk −${Math.round(damageRiskReductionPct)}%`);
+  }
+
+  const qualifies =
+    beatsPacksizeScore &&
+    thresholdHits.length > 0 &&
+    meaningfulImprovements.length > 0;
+
+  const parts: string[] = [];
+  if (scoreDelta > 0) parts.push(`improves the engineering score by ${Math.round(scoreDelta)} points`);
+  if (transportCostReductionPct != null && transportCostReductionPct > 0.5) {
+    parts.push(`reduces transportation cost by ${Math.round(transportCostReductionPct)}%`);
+  }
+  if (dunnageReductionPct != null && dunnageReductionPct > 0.5) {
+    parts.push(`reduces paper dunnage by ${Math.round(dunnageReductionPct)}%`);
+  }
+  if (packagingCostSavings > 0.01) {
+    parts.push(`lowers total packaging cost by $${packagingCostSavings.toFixed(2)} per shipment`);
+  }
+  if (utilImprovementPoints > 0.5) {
+    parts.push(`improves cube utilization by ${Math.round(utilImprovementPoints)} points`);
+  }
+  if (damageRiskReductionPct != null && damageRiskReductionPct > 0.5) {
+    parts.push(`lowers damage risk by ${Math.round(damageRiskReductionPct)}%`);
+  }
+
+  const summary =
+    parts.length === 0
+      ? "Custom carton was evaluated against the Packsize recommendation."
+      : `Custom carton recommended because it ${parts.join(", ")}.`;
+
+  return {
+    scoreDelta,
+    packagingCostSavings,
+    packagingCostReductionPct,
+    transportCostPacksize,
+    transportCostCustom,
+    transportCostSavings,
+    transportCostReductionPct,
+    utilImprovementPoints,
+    dunnageReductionPct,
+    damageRiskReductionPct,
+    movementRiskReduction,
+    cgImproved,
+    weightBalanceImproved,
+    corrugatedAreaReductionPct,
+    meaningfulImprovements,
+    thresholdHits,
+    beatsPacksizeScore,
+    qualifies,
+    summary,
+  };
+}
+
+/**
+ * Decide whether to present a custom carton vs the best Packsize pick.
+ */
+export function decideCustomCarton(
+  packsize: { carton: Carton; score: EngineeringScore; cubing: CubingResult },
+  customCandidate: { carton: Carton; score: EngineeringScore; cubing: CubingResult } | null,
+  thresholds: CustomCartonThresholds = DEFAULT_CUSTOM_THRESHOLDS,
+): CustomCartonDecision {
+  if (!customCandidate) return { status: "not-evaluated" };
+
+  const sameDims =
+    Math.abs(customCandidate.carton.length - packsize.carton.length) < 0.05 &&
+    Math.abs(customCandidate.carton.width - packsize.carton.width) < 0.05 &&
+    Math.abs(customCandidate.carton.height - packsize.carton.height) < 0.05;
+  if (sameDims) {
+    return {
+      status: "evaluated-not-beneficial",
+      candidate: {
+        ...customCandidate,
+        reason: "Custom size matched Packsize dimensions — no advantage.",
+        comparison: evaluateCustomVsPacksize(packsize, customCandidate, thresholds),
+      },
+    };
+  }
+
+  const comparison = evaluateCustomVsPacksize(packsize, customCandidate, thresholds);
+  const recommendation: CustomCartonRecommendation = {
+    ...customCandidate,
+    reason: comparison.summary,
+    comparison,
+  };
+
+  if (comparison.qualifies) {
+    return { status: "recommended", recommendation };
+  }
+  return { status: "evaluated-not-beneficial", candidate: recommendation };
 }
 
 function roundCartonDim(inches: number, step = 0.25): number {
@@ -266,14 +505,33 @@ export function suggestCustomCarton(
   }
 
   const score = scoreCarton(carton, items, cubing);
-  const reason =
-    seedCubing.utilization < UTIL_MIN
-      ? `Packsize pick at ${Math.round(seedCubing.utilization * 100)}% util is below the ${Math.round(UTIL_MIN * 100)}% preferred floor — custom size targets ~${Math.round(targetUtil * 100)}%`
-      : seedCubing.utilization > UTIL_MAX
-        ? `Packsize pick at ${Math.round(seedCubing.utilization * 100)}% util exceeds the ${Math.round(UTIL_MAX * 100)}% preferred ceiling — custom size adds clearance toward ~${Math.round(targetUtil * 100)}%`
-        : `Packsize pick is outside preferred engineering targets — custom size aims for the ${Math.round(UTIL_IDEAL_LOW * 100)}–${Math.round(UTIL_IDEAL_HIGH * 100)}% ideal band`;
-
-  return { carton, score, cubing, reason };
+  return {
+    carton,
+    score,
+    cubing,
+    reason: `Custom size targeting ~${Math.round(targetUtil * 100)}% cube utilization from 3D pack-out.`,
+    comparison: {
+      scoreDelta: 0,
+      packagingCostSavings: 0,
+      packagingCostReductionPct: null,
+      transportCostPacksize: 0,
+      transportCostCustom: 0,
+      transportCostSavings: 0,
+      transportCostReductionPct: null,
+      utilImprovementPoints: 0,
+      dunnageReductionPct: null,
+      damageRiskReductionPct: null,
+      movementRiskReduction: 0,
+      cgImproved: false,
+      weightBalanceImproved: false,
+      corrugatedAreaReductionPct: null,
+      meaningfulImprovements: [],
+      thresholdHits: [],
+      beatsPacksizeScore: false,
+      qualifies: false,
+      summary: "",
+    },
+  };
 }
 
 export function scoreCarton(
@@ -438,12 +696,13 @@ export function scoreCarton(
  * Physical fit (3D cubing) is separate from engineering quality.
  * Rank every Packsize carton that physically fits; recommend highest score.
  * noFit only when zero cartons pass complete 3D cubing.
- * When the top Packsize pick is outside preferred utilization targets,
- * also propose a custom-sized carton scored alongside it.
+ * Always evaluate an optimal custom size; present it only when it beats Packsize
+ * by configurable engineering / financial thresholds.
  */
 export function calcAI(
   items: OrderItem[],
   cartons: Carton[],
+  thresholds: CustomCartonThresholds = DEFAULT_CUSTOM_THRESHOLDS,
 ): {
   carton: Carton;
   score: EngineeringScore;
@@ -452,7 +711,10 @@ export function calcAI(
   candidateCount: number;
   minRequired: MinRequired;
   cubing: CubingResult | null;
+  /** Present only when custom qualifies vs Packsize */
   custom: CustomCartonRecommendation | null;
+  /** Full custom decision (recommended / evaluated-not-beneficial / not-evaluated) */
+  customDecision: CustomCartonDecision;
 } {
   const req = minRequiredDims(items);
   const FALLBACK = emptyScore();
@@ -486,6 +748,7 @@ export function calcAI(
       minRequired: req,
       cubing: null,
       custom: null,
+      customDecision: { status: "not-evaluated" },
     };
   }
 
@@ -505,17 +768,11 @@ export function calcAI(
     rank: i + 1,
   }));
 
-  const outsideTargets =
-    best.score.fitStatus === "not-recommended" || isOutsidePreferredUtil(best.score);
-  const customRaw =
-    outsideTargets ? suggestCustomCarton(items, best.cubing, cartons) : null;
+  // Always size an optimal custom carton from the best Packsize pack-out, then gate display.
+  const customCandidate = suggestCustomCarton(items, best.cubing, cartons);
+  const customDecision = decideCustomCarton(best, customCandidate, thresholds);
   const custom =
-    customRaw &&
-    (Math.abs(customRaw.carton.length - best.carton.length) > 0.05 ||
-      Math.abs(customRaw.carton.width - best.carton.width) > 0.05 ||
-      Math.abs(customRaw.carton.height - best.carton.height) > 0.05)
-      ? customRaw
-      : null;
+    customDecision.status === "recommended" ? customDecision.recommendation : null;
 
   return {
     carton: best.carton,
@@ -526,6 +783,7 @@ export function calcAI(
     minRequired: req,
     cubing: best.cubing,
     custom,
+    customDecision,
   };
 }
 
