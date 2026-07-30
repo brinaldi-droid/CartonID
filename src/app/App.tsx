@@ -103,6 +103,19 @@ interface AnalysisRecord {
   wmsVoidPct?: number;
   /** Primary SKU category for executive filters */
   category?: string;
+  /**
+   * Custom carton that cleared improvement thresholds and was shown to the user.
+   * Used by Analytics to rank common made-to-order sizes for master-list additions.
+   */
+  customRecommended?: {
+    length: number;
+    width: number;
+    height: number;
+    volume: number;
+    cost: number;
+    score: number;
+    scoreDelta: number;
+  };
   /** Full breakdown snapshot — older history entries may omit this */
   breakdown?: {
     items: AnalysisItemSnapshot[];
@@ -650,6 +663,17 @@ function RecommendationScreen({ items, cartons, wmsCartonId, onBack, onRecorded 
       aiVolume: aiVol,
       wmsVoidPct: wmsCubing.fits ? wmsCubing.voidPct : undefined,
       category: items[0]?.sku.category,
+      customRecommended: custom
+        ? {
+            length: custom.carton.length,
+            width: custom.carton.width,
+            height: custom.carton.height,
+            volume: vol(custom.carton.length, custom.carton.width, custom.carton.height),
+            cost: custom.carton.cost,
+            score: custom.score.total,
+            scoreDelta: custom.comparison.scoreDelta,
+          }
+        : undefined,
       breakdown: {
         items: items.map(({ sku, qty }) => ({
           skuId: sku.id,
@@ -1610,6 +1634,44 @@ function AnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onCl
   const confirmRate = n ? Math.round((history.filter((h) => h.confirmedWms).length / n) * 100) : 0;
   const overrides = history.filter((h) => !h.confirmedWms).length;
 
+  const customSizeStats = (() => {
+    type Agg = {
+      key: string;
+      length: number;
+      width: number;
+      height: number;
+      volume: number;
+      count: number;
+      totalScore: number;
+      lastAt: string;
+    };
+    const map = new Map<string, Agg>();
+    for (const h of history) {
+      const c = h.customRecommended;
+      if (!c) continue;
+      const key = `${c.length}×${c.width}×${c.height}`;
+      const prev = map.get(key);
+      if (prev) {
+        prev.count += 1;
+        prev.totalScore += c.score;
+        if (h.at > prev.lastAt) prev.lastAt = h.at;
+      } else {
+        map.set(key, {
+          key,
+          length: c.length,
+          width: c.width,
+          height: c.height,
+          volume: c.volume,
+          count: 1,
+          totalScore: c.score,
+          lastAt: h.at,
+        });
+      }
+    }
+    return [...map.values()].sort((a, b) => b.count - a.count || b.volume - a.volume);
+  })();
+  const customRecommendCount = history.filter((h) => h.customRecommended).length;
+
   return (
     <div className="flex flex-col gap-5 max-w-4xl mx-auto w-full">
       <div className="flex items-start justify-between gap-4">
@@ -1644,6 +1706,80 @@ function AnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onCl
         ))}
       </div>
 
+      {/* Custom carton demand — master-list candidates */}
+      <Card>
+        <div className="px-5 py-3 border-b flex flex-wrap items-center justify-between gap-2" style={{ borderColor: C.border, background: C.bgSoft }}>
+          <div>
+            <span className="text-[10px] uppercase tracking-widest" style={{ fontFamily: MONO, color: C.slate }}>
+              Custom Cartons
+            </span>
+            <p className="text-[11px] mt-0.5" style={{ color: C.slate }}>
+              Most common made-to-order sizes that cleared improvement thresholds — candidates for the Packsize master list.
+            </p>
+          </div>
+          <span className="text-[10px]" style={{ fontFamily: MONO, color: C.teal }}>
+            {customRecommendCount} recommendation{customRecommendCount !== 1 ? "s" : ""} · {customSizeStats.length} unique size{customSizeStats.length !== 1 ? "s" : ""}
+          </span>
+        </div>
+        {customSizeStats.length === 0 ? (
+          <div className="px-5 py-8 text-center">
+            <p className="text-sm" style={{ color: C.slate }}>
+              No custom carton recommendations yet. When CartonIQ proposes a custom size that beats Packsize, it will appear here.
+            </p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b" style={{ borderColor: C.border }}>
+                  {["Rank", "Dimensions (L×W×H)", "Volume", "Times recommended", "Share", "Avg eng. score", "Last seen"].map((h) => (
+                    <th key={h} className="text-left px-4 py-2 text-[10px] uppercase tracking-wider"
+                      style={{ fontFamily: MONO, color: C.slate }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {customSizeStats.map((row, i) => {
+                  const share = customRecommendCount
+                    ? Math.round((row.count / customRecommendCount) * 100)
+                    : 0;
+                  return (
+                    <tr key={row.key} className="border-b last:border-0" style={{ borderColor: C.border }}>
+                      <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.slate }}>
+                        #{i + 1}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.navy }}>
+                        {row.length} × {row.width} × {row.height} in
+                      </td>
+                      <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.slate }}>
+                        {Math.round(row.volume).toLocaleString()} in³
+                      </td>
+                      <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: C.teal }}>
+                        {row.count}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.navy }}>
+                        <div className="flex items-center gap-2 min-w-[100px]">
+                          <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: C.bgMuted }}>
+                            <div className="h-full rounded-full" style={{ width: `${share}%`, background: C.cyan }} />
+                          </div>
+                          <span>{share}%</span>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.navy }}>
+                        {Math.round(row.totalScore / row.count)}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.slate }}>
+                        {new Date(row.lastAt).toLocaleString()}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
       {n === 0 ? (
         <div className="rounded-lg border border-dashed p-12 text-center" style={{ borderColor: C.border }}>
           <BarChart3 size={28} className="mx-auto mb-2" style={{ color: C.bgMuted }} />
@@ -1660,7 +1796,7 @@ function AnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onCl
             <table className="w-full">
               <thead>
                 <tr className="border-b" style={{ borderColor: C.border }}>
-                  {["When", "Order", "WMS", "AI", "Savings", "Util", "Score", ""].map((h) => (
+                  {["When", "Order", "WMS", "AI", "Custom", "Savings", "Util", "Score", ""].map((h) => (
                     <th key={h || "go"} className="text-left px-4 py-2 text-[10px] uppercase tracking-wider"
                       style={{ fontFamily: MONO, color: C.slate }}>{h}</th>
                   ))}
@@ -1684,6 +1820,11 @@ function AnalyticsScreen({ history, onClear }: { history: AnalysisRecord[]; onCl
                     </td>
                     <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.violet }}>{h.wmsCarton}</td>
                     <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: C.teal }}>{h.aiCarton}</td>
+                    <td className="px-4 py-2.5 text-xs" style={{ fontFamily: MONO, color: h.customRecommended ? C.cyan : C.slate }}>
+                      {h.customRecommended
+                        ? `${h.customRecommended.length}×${h.customRecommended.width}×${h.customRecommended.height}`
+                        : "—"}
+                    </td>
                     <td className="px-4 py-2.5 text-xs font-semibold" style={{ fontFamily: MONO, color: h.savings > 0 ? C.teal : C.slate }}>
                       ${h.savings.toFixed(2)}
                     </td>
