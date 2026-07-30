@@ -138,11 +138,153 @@ export function calcManhattan(items: OrderItem[], cartons: Carton[]): Carton {
   );
 }
 
-export function scoreCarton(c: Carton, items: OrderItem[]): EngineeringScore {
+export interface CustomCartonRecommendation {
+  carton: Carton;
+  score: EngineeringScore;
+  cubing: CubingResult;
+  /** Why a custom size was proposed */
+  reason: string;
+}
+
+/** True when cube utilization is outside the 80–92% preferred band. */
+export function isOutsidePreferredUtil(score: Pick<EngineeringScore, "utilization">): boolean {
+  const u = score.utilization / 100;
+  return u < UTIL_MIN - 1e-9 || u > UTIL_MAX + 1e-9;
+}
+
+function roundCartonDim(inches: number, step = 0.25): number {
+  return Math.max(step, Math.ceil(inches / step - 1e-9) * step);
+}
+
+function estimateCustomCost(volumeIn3: number, catalog: Carton[]): number {
+  const priced = catalog.filter((c) => c.cost > 0 && vol(c.length, c.width, c.height) > 0);
+  if (priced.length === 0) return 0;
+  const rates = priced.map((c) => c.cost / vol(c.length, c.width, c.height)).sort((a, b) => a - b);
+  const mid = rates[Math.floor(rates.length / 2)]!;
+  return Math.round(mid * volumeIn3 * 100) / 100;
+}
+
+function makeCustomCarton(
+  length: number,
+  width: number,
+  height: number,
+  items: OrderItem[],
+  catalog: Carton[],
+): Carton {
+  const L = roundCartonDim(length);
+  const W = roundCartonDim(width);
+  const H = roundCartonDim(height);
+  const { tw } = orderTotals(items);
+  const v = vol(L, W, H);
+  return {
+    id: `CUSTOM-${L}x${W}x${H}`,
+    name: `Custom ${L}×${W}×${H}`,
+    number: "CUSTOM",
+    length: L,
+    width: W,
+    height: H,
+    maxWeight: Math.max(tw * 1.5, 50),
+    cost: estimateCustomCost(v, catalog),
+  };
+}
+
+/**
+ * Derive a made-to-order carton sized into the ideal 85–90% utilization band
+ * from a successful 3D pack-out (typically the Packsize AI arrangement).
+ */
+export function suggestCustomCarton(
+  items: OrderItem[],
+  seedCubing: CubingResult,
+  catalog: Carton[] = [],
+): CustomCartonRecommendation | null {
+  if (!seedCubing.fits || seedCubing.placements.length === 0) return null;
+
+  const needL = Math.max(...seedCubing.placements.map((p) => p.x + p.iL));
+  const needW = Math.max(...seedCubing.placements.map((p) => p.y + p.iW));
+  const needH = Math.max(...seedCubing.placements.map((p) => p.z + p.iH));
+  // Manufacturing / loading clearance beyond tight AABB
+  const clearance = Math.max(FIT_TOL, 0.125);
+
+  let L = needL + clearance;
+  let W = needW + clearance;
+  let H = needH + clearance;
+
+  const itemVol = seedCubing.itemVolume;
+  const targetUtil = (UTIL_IDEAL_LOW + UTIL_IDEAL_HIGH) / 2;
+  const targetVol = itemVol / targetUtil;
+  const curVol = L * W * H;
+
+  if (curVol + 1e-9 < targetVol) {
+    const scale = Math.cbrt(targetVol / curVol);
+    L *= scale;
+    W *= scale;
+    H *= scale;
+  }
+
+  let carton = makeCustomCarton(L, W, H, items, catalog);
+  let cubing = cubePack(items, carton);
+
+  // Expand until physical fit succeeds
+  for (let i = 0; i < 24 && !cubing.fits; i++) {
+    L = carton.length + 0.25;
+    W = carton.width + 0.25;
+    H = carton.height + 0.25;
+    carton = makeCustomCarton(L, W, H, items, catalog);
+    cubing = cubePack(items, carton);
+  }
+  if (!cubing.fits) return null;
+
+  // Pull utilization into preferred band when geometry allows
+  for (let i = 0; i < 32 && cubing.utilization > UTIL_MAX; i++) {
+    // Prefer height growth (dunnage / cushioning headroom), then footprint
+    if (i % 3 === 0) H = carton.height + 0.25;
+    else if (i % 3 === 1) L = carton.length + 0.25;
+    else W = carton.width + 0.25;
+    carton = makeCustomCarton(L, W, H, items, catalog);
+    const next = cubePack(items, carton);
+    if (!next.fits) break;
+    cubing = next;
+  }
+
+  // If still below preferred floor, try modest shrink toward OBB (never below packed need)
+  for (let i = 0; i < 24 && cubing.utilization < UTIL_MIN; i++) {
+    const minL = roundCartonDim(needL + clearance);
+    const minW = roundCartonDim(needW + clearance);
+    const minH = roundCartonDim(needH + clearance);
+    const nL = Math.max(minL, roundCartonDim(carton.length - 0.25));
+    const nW = Math.max(minW, roundCartonDim(carton.width - 0.25));
+    const nH = Math.max(minH, roundCartonDim(carton.height - 0.25));
+    if (nL === carton.length && nW === carton.width && nH === carton.height) break;
+    const candidate = makeCustomCarton(nL, nW, nH, items, catalog);
+    const next = cubePack(items, candidate);
+    if (!next.fits) break;
+    carton = candidate;
+    cubing = next;
+    L = nL;
+    W = nW;
+    H = nH;
+  }
+
+  const score = scoreCarton(carton, items, cubing);
+  const reason =
+    seedCubing.utilization < UTIL_MIN
+      ? `Packsize pick at ${Math.round(seedCubing.utilization * 100)}% util is below the ${Math.round(UTIL_MIN * 100)}% preferred floor — custom size targets ~${Math.round(targetUtil * 100)}%`
+      : seedCubing.utilization > UTIL_MAX
+        ? `Packsize pick at ${Math.round(seedCubing.utilization * 100)}% util exceeds the ${Math.round(UTIL_MAX * 100)}% preferred ceiling — custom size adds clearance toward ~${Math.round(targetUtil * 100)}%`
+        : `Packsize pick is outside preferred engineering targets — custom size aims for the ${Math.round(UTIL_IDEAL_LOW * 100)}–${Math.round(UTIL_IDEAL_HIGH * 100)}% ideal band`;
+
+  return { carton, score, cubing, reason };
+}
+
+export function scoreCarton(
+  c: Carton,
+  items: OrderItem[],
+  precomputed?: CubingResult,
+): EngineeringScore {
   const { tw, maxF } = orderTotals(items);
   if (c.maxWeight > 0 && tw > c.maxWeight) return emptyScore();
 
-  const r = cubePack(items, c);
+  const r = precomputed?.fits ? precomputed : cubePack(items, c);
   if (!r.fits) return emptyScore();
 
   const u = r.utilization;
@@ -296,6 +438,8 @@ export function scoreCarton(c: Carton, items: OrderItem[]): EngineeringScore {
  * Physical fit (3D cubing) is separate from engineering quality.
  * Rank every Packsize carton that physically fits; recommend highest score.
  * noFit only when zero cartons pass complete 3D cubing.
+ * When the top Packsize pick is outside preferred utilization targets,
+ * also propose a custom-sized carton scored alongside it.
  */
 export function calcAI(
   items: OrderItem[],
@@ -307,19 +451,21 @@ export function calcAI(
   noFit: boolean;
   candidateCount: number;
   minRequired: MinRequired;
+  cubing: CubingResult | null;
+  custom: CustomCartonRecommendation | null;
 } {
   const req = minRequiredDims(items);
   const FALLBACK = emptyScore();
 
   // Prefer cartons that clear the soft envelope first (faster wins), then the rest.
-  // Physical 3D cubing is the only authority for fit — never invent custom cartons.
-  const scored: Array<{ carton: Carton; score: EngineeringScore }> = [];
+  const scored: Array<{ carton: Carton; score: EngineeringScore; cubing: CubingResult }> = [];
   const tried = new Set<string>();
   const consider = (c: Carton) => {
     if (tried.has(c.id)) return;
     tried.add(c.id);
-    if (!cubePack(items, c).fits) return;
-    scored.push({ carton: c, score: scoreCarton(c, items) });
+    const cubing = cubePack(items, c);
+    if (!cubing.fits) return;
+    scored.push({ carton: c, score: scoreCarton(c, items, cubing), cubing });
   };
 
   const envelopeHits = cartons.filter((c) => cartonPassesEnvelope(c, req));
@@ -331,7 +477,16 @@ export function calcAI(
 
   if (scored.length === 0) {
     const last = sortedByVol(cartons)[cartons.length - 1] ?? cartons[0];
-    return { carton: last, score: FALLBACK, ranked: [], noFit: true, candidateCount: 0, minRequired: req };
+    return {
+      carton: last,
+      score: FALLBACK,
+      ranked: [],
+      noFit: true,
+      candidateCount: 0,
+      minRequired: req,
+      cubing: null,
+      custom: null,
+    };
   }
 
   // Ranking: engineering quality first; prefer layouts that do not need mechanical review
@@ -343,14 +498,34 @@ export function calcAI(
         vol(b.carton.length, b.carton.width, b.carton.height),
   );
 
-  const ranked: RankedOption[] = scored.slice(0, 8).map((x, i) => ({ ...x, rank: i + 1 }));
+  const best = scored[0]!;
+  const ranked: RankedOption[] = scored.slice(0, 8).map((x, i) => ({
+    carton: x.carton,
+    score: x.score,
+    rank: i + 1,
+  }));
+
+  const outsideTargets =
+    best.score.fitStatus === "not-recommended" || isOutsidePreferredUtil(best.score);
+  const customRaw =
+    outsideTargets ? suggestCustomCarton(items, best.cubing, cartons) : null;
+  const custom =
+    customRaw &&
+    (Math.abs(customRaw.carton.length - best.carton.length) > 0.05 ||
+      Math.abs(customRaw.carton.width - best.carton.width) > 0.05 ||
+      Math.abs(customRaw.carton.height - best.carton.height) > 0.05)
+      ? customRaw
+      : null;
+
   return {
-    carton: scored[0].carton,
-    score: scored[0].score,
+    carton: best.carton,
+    score: best.score,
     ranked,
     noFit: false,
     candidateCount: scored.length,
     minRequired: req,
+    cubing: best.cubing,
+    custom,
   };
 }
 
@@ -377,7 +552,7 @@ export function buildRationale(
         : score.utilization > Math.round(UTIL_MAX * 100)
           ? ` — above the 92% preferred ceiling (tight clearance); still the best Packsize option by engineering score`
           : ` — within the 80–92% preferred range`;
-  const packsizeNote = `Selected from ${candidateCount} Packsize carton${candidateCount !== 1 ? "s" : ""} that passed full 3D cubing — no custom sizes generated.`;
+  const packsizeNote = `Selected from ${candidateCount} Packsize carton${candidateCount !== 1 ? "s" : ""} that passed full 3D cubing.`;
   const cubingNote = `3D cubing placed ${cubing.layers} layer${cubing.layers !== 1 ? "s" : ""} at ${score.utilization}% cube utilization${utilBand}. 5% of carton volume (${cubing.dunnage5Pct} in³) is reserved for kraft paper dunnage. Weight balance: ${cubing.weightBalance}.`;
   if (ai.id === manhattan.id) {
     return `CartonIQ confirms the ${wmsLabel} selection of ${ai.name} (#${ai.number ?? ai.id}). ${packsizeNote} ${cubingNote} Damage Prevention ${score.damagePrevention}/100 · Movement Prevention ${score.movementPrevention}/100.`;
